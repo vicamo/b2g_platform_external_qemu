@@ -509,6 +509,22 @@ amodem_sms_get_cmse( AModem  modem )
     return modem->sms_cmse.errs;
 }
 
+static int
+amodem_sms_get_next_cmse_err( AModem  modem )
+{
+    if (!modem->sms_cmse.errs) {
+        return -1;
+    }
+
+    int err = modem->sms_cmse.errs[modem->sms_cmse.index++];
+    if (err < 0) {
+        modem->sms_cmse.index = 1;
+        err = modem->sms_cmse.errs[0];
+    }
+
+    return err;
+}
+
 void
 amodem_sms_set_drpt( AModem  modem, int*  statuses )
 {
@@ -2349,13 +2365,21 @@ handleSendSMSText( const char*  cmd, AModem  modem )
     pdu = smspdu_create_from_hex( cmd, len );
     if (pdu == NULL) {
         D("%s: invalid SMS PDU ?: '%s'\n", __FUNCTION__, cmd);
-        return "+CMS ERROR: INVALID SMS PDU";
+        // "Invalid message, unspecified". See 3GPP TS 24.011 Annex E.
+        return "+CMS ERROR: 95";
     }
     if (smspdu_get_receiver_address(pdu, &address) < 0) {
         D("%s: could not get SMS receiver address from '%s'\n",
           __FUNCTION__, cmd);
         smspdu_free(pdu);
-        return "+CMS ERROR: BAD SMS RECEIVER ADDRESS";
+        // "Invalid SME address". See 3GPP TS 23.040 clause 9.2.3.22.
+        return "+CMS ERROR: 195";
+    }
+
+    int err = amodem_sms_get_next_cmse_err(modem);
+    if (err > 0) {
+        smspdu_free(pdu);
+        return amodem_printf(modem, "+CMS ERROR: %d", err);
     }
 
     modem->sms_mref = (modem->sms_mref + 1) & 0xFF;
