@@ -35,6 +35,10 @@ extern int          amodem_send( AModem  modem, const char*  cmd );
 extern void         amodem_receive_sms( AModem  modem, SmsPDU  pdu );
 
 extern int          amodem_sms_get_mref( AModem  modem );
+extern void         amodem_sms_set_cmse( AModem  modem, int*  errs );
+extern int*         amodem_sms_get_cmse( AModem  modem );
+extern void         amodem_sms_set_drpt( AModem  modem, int*  statuses );
+extern int*         amodem_sms_get_drpt( AModem  modem );
 
 /* simulate the receipt on an incoming Cell Broadcast message */
 extern void         amodem_receive_cbs( AModem  modem, SmsPDU  pdu );

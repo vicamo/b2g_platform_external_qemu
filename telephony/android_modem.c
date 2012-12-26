@@ -361,6 +361,14 @@ typedef struct AModemRec_
     /* SMS */
     int           wait_sms;
     int           sms_mref;
+    struct {
+        int*      errs;
+        int       index;
+    } sms_cmse;
+    struct {
+        int*      statuses;
+        int       index;
+    } sms_drpt;
 
     /* SIM card */
     ASimCard      sim;
@@ -477,6 +485,40 @@ int
 amodem_sms_get_mref( AModem  modem )
 {
     return modem->sms_mref;
+}
+
+void
+amodem_sms_set_cmse( AModem  modem, int*  errs )
+{
+    if (modem->sms_cmse.errs) {
+        free(modem->sms_cmse.errs);
+    }
+
+    modem->sms_cmse.errs = errs;
+    modem->sms_cmse.index = 0;
+}
+
+int*
+amodem_sms_get_cmse( AModem  modem )
+{
+    return modem->sms_cmse.errs;
+}
+
+void
+amodem_sms_set_drpt( AModem  modem, int*  statuses )
+{
+    if (modem->sms_drpt.statuses) {
+        free(modem->sms_drpt.statuses);
+    }
+
+    modem->sms_drpt.statuses = statuses;
+    modem->sms_drpt.index = 0;
+}
+
+int*
+amodem_sms_get_drpt( AModem  modem )
+{
+    return modem->sms_drpt.statuses;
 }
 
 void
@@ -640,6 +682,8 @@ amodem_reset( AModem  modem )
 
     modem->wait_sms    = 0;
     modem->sms_mref    = -1;
+    amodem_sms_set_cmse(modem, NULL);
+    amodem_sms_set_drpt(modem, NULL);
 
     modem->rssi= 7;    // Two signal strength bars
     modem->ber = 99;   // Means 'unknown'
