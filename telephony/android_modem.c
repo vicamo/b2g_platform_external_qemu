@@ -360,6 +360,7 @@ typedef struct AModemRec_
 
     /* SMS */
     int           wait_sms;
+    int           sms_mref;
 
     /* SIM card */
     ASimCard      sim;
@@ -470,6 +471,12 @@ amodem_receive_sms( AModem  modem, SmsPDU  sms )
 
         modem->unsol_func( modem->unsol_opaque, modem->out_buff );
     }
+}
+
+int
+amodem_sms_get_mref( AModem  modem )
+{
+    return modem->sms_mref;
 }
 
 void
@@ -630,7 +637,9 @@ amodem_reset( AModem  modem )
     int i;
     modem->nvram_config = amodem_load_nvram(modem);
     modem->radio_state = A_RADIO_STATE_OFF;
+
     modem->wait_sms    = 0;
+    modem->sms_mref    = -1;
 
     modem->rssi= 7;    // Two signal strength bars
     modem->ber = 99;   // Means 'unknown'
@@ -2283,7 +2292,8 @@ handleSendSMSText( const char*  cmd, AModem  modem )
         return "+CMS ERROR: BAD SMS RECEIVER ADDRESS";
     }
 
-    amodem_reply( modem, "+CMGS: 0" );
+    modem->sms_mref = (modem->sms_mref + 1) & 0xFF;
+    amodem_reply(modem, amodem_printf(modem, "+CMGS: %d", modem->sms_mref));
 
     do {
         int  index;

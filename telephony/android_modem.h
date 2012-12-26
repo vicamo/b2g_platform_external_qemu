@@ -34,6 +34,8 @@ extern int          amodem_send( AModem  modem, const char*  cmd );
 /* simulate the receipt on an incoming SMS message */
 extern void         amodem_receive_sms( AModem  modem, SmsPDU  pdu );
 
+extern int          amodem_sms_get_mref( AModem  modem );
+
 /* simulate the receipt on an incoming Cell Broadcast message */
 extern void         amodem_receive_cbs( AModem  modem, SmsPDU  pdu );
 

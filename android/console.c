@@ -1992,6 +1992,18 @@ do_sms_smsc( ControlClient  client, char*  args )
     return 0;
 }
 
+static int
+do_sms_mref( ControlClient  client, char*  args )
+{
+    if (!client->modem) {
+        control_write( client, "KO: modem emulation not running\r\n" );
+        return -1;
+    }
+
+    control_write( client, "%d\r\n", amodem_sms_get_mref(client->modem) );
+    return 0;
+}
+
 static const CommandDefRec  sms_commands[] =
 {
     { "send", "send inbound SMS text message",
@@ -2008,6 +2020,10 @@ static const CommandDefRec  sms_commands[] =
     "'sms smsc <smscaddress>' allows you to simulate set smsc address\r\n"
     "'sms smsc' allows you to simulate get smsc address\r\n", NULL,
     do_sms_smsc, NULL},
+
+    { "mref", "show TP-MR (message reference)",
+    "'sms mref' to get last issued TP-MR (message reference)\r\n", NULL,
+    do_sms_mref, NULL },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
