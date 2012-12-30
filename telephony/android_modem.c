@@ -3280,6 +3280,36 @@ EndCommand:
     return "+CMS ERROR: 304";
 }
 
+static const char*
+handleApplicationDiscovery( const char*  cmd, AModem  modem )
+{
+    int cmdlen, option;
+    const char* result;
+
+    if ( !memcmp(cmd, "+CUAD=?", 7) ) {
+        return "+CUAD: 0,1";
+    }
+
+    cmdlen = strlen(cmd);
+    if ( cmdlen == 5 ) {
+        option = 0;
+    } else if ( (cmdlen != 7) || (cmd[5] != '=') ||
+            !(cmd[6] == '0' || cmd[6] == '1') ) {
+        return "+CME ERROR: 50"; // Invalid parameter.
+    } else {
+        option = cmd[6] - '0';
+    }
+
+    amodem_begin_line( modem );
+
+    result = asimcard_io( modem->sim, );
+    amodem_add_line( modem, "+CUAD: %i,%i\r\n", rssi, ber );
+    if ( option == 1 ) {
+    }
+
+    return amodem_end_line( modem );
+}
+
 /* a function used to deal with a non-trivial request */
 typedef const char*  (*ResponseHandler)(const char*  cmd, AModem  modem);
 
@@ -3413,7 +3443,10 @@ static const struct {
     { "%CPI=3", NULL, NULL },
     { "%CSTAT=1", NULL, NULL },
 
+    /* see requestGetSmscAddress() */
     { "!+CSCA", NULL, handleSmscAddress },
+
+    { "!+CUAD", NULL, handleApplicationDiscovery },
 
     /* end of list */
     {NULL, NULL, NULL}
