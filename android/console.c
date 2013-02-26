@@ -1448,7 +1448,7 @@ do_gsm_busy( ControlClient  client, char*  args )
         control_write( client, "KO: no current outbound call to number '%s' (call %p)\r\n", args, call );
         return -1;
     }
-    if ( amodem_disconnect_call( client->modem, args ) < 0 ) {
+    if ( amodem_remote_call_busy( client->modem, args ) < 0 ) {
         control_write( client, "KO: could not cancel this number\r\n" );
         return -1;
     }
@@ -1505,6 +1505,20 @@ do_gsm_accept( ControlClient  client, char*  args )
     }
     if ( amodem_update_call( client->modem, args, A_CALL_ACTIVE ) < 0 ) {
         control_write( client, "KO: could not activate this call\r\n" );
+        return -1;
+    }
+    return 0;
+}
+
+static int
+do_gsm_clear( ControlClient client, char* args)
+{
+    if (!client->modem) {
+        control_write( client, "KO: modem emulation not running\r\n" );
+        return -1;
+    }
+    if ( amodem_clear_call( client->modem ) < 0 ) {
+        control_write( client, "KO: could not clear up modem\r\n" );
         return -1;
     }
     return 0;
@@ -1632,6 +1646,10 @@ static const CommandDefRec  gsm_commands[] =
     "'gsm accept <remoteNumber>' change the state of a call to 'active'. this is only possible\r\n"
     "if the call is in the 'waiting' or 'held' state\r\n", NULL,
     do_gsm_accept, NULL },
+
+    { "clear", "clear current phone calls",
+    "'gsm clear' cleans up all inbound and outbound calls\r\n", NULL,
+    do_gsm_clear, NULL },
 
     { "cancel", "disconnect an inbound or outbound phone call",
     "'gsm cancel <phonenumber>' allows you to simulate the end of an inbound or outbound call\r\n", NULL,
