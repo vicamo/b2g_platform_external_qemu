@@ -42,6 +42,7 @@ OPTION_CROSS=
 OPTION_ARCH=
 OPTION_CONFIG=
 OPTION_JOBS=
+OPTION_MENUCONFIG=no
 
 for opt do
     optarg=$(expr "x$opt" : 'x[^=]*=\(.*\)')
@@ -63,6 +64,9 @@ for opt do
     --config=*)
         OPTION_CONFIG=$optarg
         ;;
+    --menuconfig)
+        OPTION_MENUCONFIG=yes
+        ;;
     -j*)
         OPTION_JOBS=$optarg
         ;;
@@ -83,6 +87,7 @@ if [ $OPTION_HELP = "yes" ] ; then
     echo "  --out=<directory>        output directory [$OUTPUT]"
     echo "  --cross=<prefix>         cross-toolchain prefix [$CROSSPREFIX]"
     echo "  --config=<name>          kernel config name [$CONFIG]"
+    echo "  --menuconfig             perform menuconfig only."
     echo "  -j<number>               launch <number> parallel build jobs [$JOBS]"
     echo ""
     echo "NOTE: --armv7 is equivalent to --config=goldfish_armv7. It is"
@@ -197,16 +202,29 @@ fi
 export REAL_CROSS_COMPILE="$CROSS_COMPILE"
 CROSS_COMPILE=$(dirname "$0")/kernel-toolchain/android-kernel-toolchain-
 
+MAKE_FLAGS="-j$JOBS"
+
 # Do the build
 #
-rm -f include/asm &&
-make ${CONFIG}_defconfig &&    # configure the kernel
-make -j$JOBS                   # build it
+echo -n "Cleaning up source tree ... "
+(git ls-files -o | xargs rm -f) || (echo "failed"; exit 1)
+echo "done"
 
-if [ $? != 0 ] ; then
-    echo "Could not build the kernel. Aborting !"
-    exit 1
+echo -n "Setting up ${CONFIG}_defconfig ... "
+make $MAKE_FLAGS ${CONFIG}_defconfig || (echo "failed"; exit 1)
+echo "done"
+
+if [ "x$OPTION_MENUCONFIG" = xyes ]; then
+    echo -n "Configuring ${CONFIG}_deconfig ... "
+    make $MAKE_FLAGS menuconfig || (echo "failed"; exit 1)
+    echo "done"
+
+    exit 0
 fi
+
+echo -n "Building ${CONFIG}_deconfig ... "
+make $MAKE_FLAGS || (echo "failed"; exit 1)
+echo "done"
 
 # Note: The exact names of the output files are important for the Android build,
 #       do not change the definitions lightly.
