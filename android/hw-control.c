@@ -115,6 +115,15 @@ hw_control_do_query( HwControl*  h,
         }
         return;
     }
+
+    q = if_starts_with( query, querylen, "vibrator:" );
+    if (q != NULL) {
+        if (h->client_funcs.vibrate) {
+            int value = atoi((const char*)q);
+            h->client_funcs.vibrate( h->client, value );
+        }
+        return;
+    }
 }
 
 

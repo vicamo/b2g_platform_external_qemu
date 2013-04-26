@@ -20,6 +20,7 @@
 #include <SDL_syswm.h>
 #include "user-events.h"
 #include <math.h>
+#include <stdio.h>
 
 #include "android/framebuffer.h"
 #include "android/opengles.h"
@@ -935,6 +936,11 @@ struct SkinWindow {
     char          fullscreen;
     char          no_display;
 
+    struct {
+      struct timeval  end;
+      int             runs;
+    } vibrate;
+
     char          enable_touch;
     char          enable_trackball;
     char          enable_dpad;
@@ -1223,6 +1229,7 @@ skin_window_create( SkinLayout*  slayout, int  x, int  y, double  scale, int  no
     window->shrink       = (scale != 1.0);
     window->scaler       = skin_scaler_create();
     window->no_display   = no_display;
+    window->vibrate.runs = -1;
 
     /* enable everything by default */
     window->enable_touch     = 1;
@@ -1473,6 +1480,63 @@ skin_window_set_lcd_brightness( SkinWindow*  window, int  brightness )
         disp->brightness = brightness;
         skin_window_redraw( window, NULL );
     }
+}
+
+static void
+idle_do_vibrate( SkinWindow*  window )
+{
+    if (!timerisset(&window->vibrate.end)) {
+        return;
+    }
+
+    static const int vector[][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
+    int new_x, new_y, runs;
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+
+    if (window->fullscreen || timercmp(&tv, &window->vibrate.end, >=)) {
+        timerclear(&window->vibrate.end);
+
+        if (window->vibrate.runs < 0) {
+            // Vibration was not even started.
+            return;
+        }
+
+        // Increate two steps to go back to origin.
+        runs = (window->vibrate.runs + 2) % 4;
+        // Reset runs as well.
+        window->vibrate.runs = -1;
+    } else {
+        // Run 0..1..2..3..0.. in sequence.
+        runs = (window->vibrate.runs + 1) % 4;
+        window->vibrate.runs = runs;
+    }
+
+#define VIBRATION_FACTOR 5
+    new_x = window->x_pos + vector[runs][0] * VIBRATION_FACTOR;
+    new_y = window->y_pos + vector[runs][1] * VIBRATION_FACTOR;
+    SDL_WM_SetPos(new_x, new_y);
+}
+
+void
+skin_window_vibrate( SkinWindow*  window, int  timeout_ms )
+{
+    if (window->no_display || window->fullscreen) {
+        return;
+    }
+
+    if (timerisset(&window->vibrate.end)) {
+        // Vibrating. Ignore.
+        return;
+    }
+
+    struct timeval diff;
+    diff.tv_sec = timeout_ms / 1000;
+    diff.tv_usec = (timeout_ms % 1000) * 1000;
+
+    gettimeofday(&(window->vibrate.end), NULL);
+    timeradd(&(window->vibrate.end), &diff, &(window->vibrate.end));
 }
 
 void
@@ -1736,6 +1800,12 @@ skin_window_process_event( SkinWindow*  window, SDL_Event*  ev )
         skin_window_redraw_opengles(window);
         break;
     }
+}
+
+void
+skin_window_idle_event( SkinWindow*  window )
+{
+  idle_do_vibrate(window);
 }
 
 static ADisplay*

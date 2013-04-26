@@ -157,6 +157,18 @@ _uiCmdProxy_brightness_change_callback(void* opaque,
     qemu_free(cmd);
 }
 
+static void
+_uiCmdProxy_vibrate_callback(void* opaque,
+                             int   timeout_ms)
+{
+    // Allocate and initialize parameters.
+    UICmdVibrate* cmd = (UICmdVibrate*)qemu_malloc(sizeof(UICmdVibrate));
+    cmd->timeout_ms = timeout_ms;
+    // Send the command.
+    _uiCmdProxy_send_command(AUICMD_VIBRATE, cmd, sizeof(*cmd));
+    qemu_free(cmd);
+}
+
 int
 uiCmdProxy_create(int fd)
 {
@@ -173,10 +185,10 @@ uiCmdProxy_create(int fd)
         return -1;
     }
     {
-        // Set brighness change callback, so we can notify
-        // the UI about the event.
+        // Set hw-control callback, so we can notify the UI about the event.
         AndroidHwControlFuncs  funcs;
         funcs.light_brightness = _uiCmdProxy_brightness_change_callback;
+        funcs.vibrate          = _uiCmdProxy_vibrate_callback;
         android_hw_control_set(&_uiCmdProxy, &funcs);
     }
     return 0;

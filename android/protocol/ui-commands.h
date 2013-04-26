@@ -26,6 +26,9 @@
 /* Changes display brightness. */
 #define AUICMD_CHANGE_DISP_BRIGHTNESS   2
 
+/* Vibrate window. */
+#define AUICMD_VIBRATE                  3
+
 /* Formats AUICMD_SET_WINDOWS_SCALE UI control command parameters.
  * Contains parameters required by android_emulator_set_window_scale routine.
  */
@@ -40,5 +43,11 @@ typedef struct UICmdChangeDispBrightness {
     int     brightness;
     char    light[0];
 } UICmdChangeDispBrightness;
+
+/* Formats AUICMD_VIBRATE UI control command parameters.
+ */
+typedef struct UICmdVibrate {
+    int timeout_ms;
+} UICmdVibrate;
 
 #endif /* _ANDROID_PROTOCOL_UI_COMMANDS_H */

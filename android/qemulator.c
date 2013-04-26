@@ -43,6 +43,15 @@ qemulator_light_brightness( void* opaque, const char*  light, int  value )
 }
 
 static void
+qemulator_vibrator_event( void* opaque, int timeout_ms )
+{
+    QEmulator*  emulator = opaque;
+
+    if (emulator->window)
+        skin_window_vibrate( emulator->window, timeout_ms );
+}
+
+static void
 qemulator_setup( QEmulator*  emulator )
 {
     AndroidOptions*  opts = emulator->opts;
@@ -89,8 +98,10 @@ qemulator_setup( QEmulator*  emulator )
     }
 
     /* initialize hardware control support */
-    uicmd_set_brightness_change_callback(qemulator_light_brightness,
-                                         emulator);
+    AndroidHwControlFuncs funcs;
+    funcs.light_brightness = qemulator_light_brightness;
+    funcs.vibrate          = qemulator_vibrator_event;
+    uicmd_set_hw_control_functions(&funcs, emulator);
 }
 
 static void
@@ -586,6 +597,7 @@ static void qemulator_refresh(QEmulator* emulator)
         }
     }
 
+    skin_window_idle_event( window );
     skin_keyboard_flush( keyboard );
 }
 

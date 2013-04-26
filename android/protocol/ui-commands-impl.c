@@ -72,8 +72,8 @@ extern void android_emulator_set_window_scale(double scale, int is_dpi);
 static UICmdImpl  _uiCmdImpl;
 
 /* Display brightness change callback. */
-static AndroidHwLightBrightnessCallback _brightness_change_callback = NULL;
-static void* _brightness_change_callback_param = NULL;
+static AndroidHwControlFuncs _hw_control_funcs;
+static void* _hw_control_funcs_param = NULL;
 
 /* Handles UI control command received from the core.
  * Param:
@@ -97,9 +97,19 @@ _uiCmdImpl_handle_command(UICmdImpl* uicmd,
         case AUICMD_CHANGE_DISP_BRIGHTNESS:
         {
             UICmdChangeDispBrightness* cmd = (UICmdChangeDispBrightness*)data;
-            if (_brightness_change_callback != NULL) {
-                _brightness_change_callback(_brightness_change_callback_param,
-                                            cmd->light, cmd->brightness);
+            if (_hw_control_funcs.light_brightness != NULL) {
+                _hw_control_funcs.light_brightness(_hw_control_funcs_param,
+                                                   cmd->light, cmd->brightness);
+            }
+            break;
+        }
+
+        case AUICMD_VIBRATE:
+        {
+            UICmdVibrate* cmd = (UICmdVibrate*)data;
+            if (_hw_control_funcs.vibrate != NULL) {
+                _hw_control_funcs.vibrate(_hw_control_funcs_param,
+                                          cmd->timeout_ms);
             }
             break;
         }
@@ -247,10 +257,10 @@ uiCmdImpl_destroy(void)
 }
 
 int
-uicmd_set_brightness_change_callback(AndroidHwLightBrightnessCallback callback,
-                                     void* opaque)
+uicmd_set_hw_control_functions(const AndroidHwControlFuncs* funcs,
+                               void* opaque)
 {
-    _brightness_change_callback = callback;
-    _brightness_change_callback_param = opaque;
+    _hw_control_funcs = *funcs;
+    _hw_control_funcs_param = opaque;
     return 0;
 }

@@ -26,9 +26,16 @@ typedef void  (*AndroidHwLightBrightnessFunc)( void*       opaque,
                                                const char* light,
                                                int         brightness );
 
+/* a callback function called when the system wants to vibrate. 'timeout_ms' is
+ * an integer for the time span of the vibration in milli-second.
+ */
+typedef void  (*AndroidHwVibrateFunc)( void* opaque,
+                                       int   timeout_ms );
+
 /* used to record a hw control 'client' */
 typedef struct {
     AndroidHwLightBrightnessFunc  light_brightness;
+    AndroidHwVibrateFunc          vibrate;
 } AndroidHwControlFuncs;
 
 /* used to initialize the hardware control support */

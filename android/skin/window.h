@@ -38,6 +38,7 @@ extern int              skin_window_reset ( SkinWindow*  window, SkinLayout*  la
 extern void             skin_window_free  ( SkinWindow*  window );
 extern void             skin_window_redraw( SkinWindow*  window, SkinRect*  rect );
 extern void             skin_window_process_event( SkinWindow*  window, SDL_Event*  ev );
+extern void             skin_window_idle_event( SkinWindow*  window );
 
 extern void             skin_window_set_onion( SkinWindow*   window,
                                                SkinImage*    onion,
@@ -56,6 +57,8 @@ extern void             skin_window_toggle_fullscreen( SkinWindow*  window );
 
 /* change the brightness of the emulator LCD screen. 'brightness' will be clamped to 0..255 */
 extern void             skin_window_set_lcd_brightness( SkinWindow*  window, int  brightness );
+/* vibrate the emulator screen. 'timeout_ms' in milli-seconds. */
+extern void             skin_window_vibrate( SkinWindow*  window, int  timeout_ms );
 
 typedef struct {
     int           width;

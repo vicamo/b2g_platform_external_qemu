@@ -30,11 +30,9 @@ uicmd_set_window_scale(double scale, int is_dpi)
 }
 
 int
-uicmd_set_brightness_change_callback(AndroidHwLightBrightnessCallback callback,
-                                     void* opaque)
+uicmd_set_hw_control_functions(const AndroidHwControlFuncs* funcs,
+                               void* opaque)
 {
-    AndroidHwControlFuncs  funcs;
-    funcs.light_brightness = callback;
-    android_hw_control_set(opaque, &funcs);
+    android_hw_control_set(opaque, funcs);
     return 0;
 }

@@ -13,6 +13,8 @@
 #ifndef _ANDROID_PROTOCOL_UI_COMMANDS_API_H
 #define _ANDROID_PROTOCOL_UI_COMMANDS_API_H
 
+#include "android/hw-control.h"
+
 /*
  * Contains the API for calling into the UI with the Core control commands.
  */
@@ -25,17 +27,8 @@
  */
 extern int uicmd_set_window_scale(double scale, int is_dpi);
 
-/* This is temporary redeclaration for AndroidHwLightBrightnessFunc declared
- * in android/hw-control.h We redeclare it here in order to keep type
- * consistency between android_core_set_brightness_change_callback and
- * light_brightness field of AndroidHwControlFuncs structure.
- */
-typedef void  (*AndroidHwLightBrightnessCallback)(void* opaque,
-                                                  const char* light,
-                                                  int  brightness);
-
-/* Registers a UI callback to be called when brightness is changed by the core. */
-extern int uicmd_set_brightness_change_callback(AndroidHwLightBrightnessCallback callback,
-                                                void* opaque);
+/* Register a new hw-control back-end */
+extern int uicmd_set_hw_control_functions(const AndroidHwControlFuncs* funcs,
+                                          void* opaque);
 
 #endif /* _ANDROID_PROTOCOL_UI_COMMANDS_API_H */
