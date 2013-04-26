@@ -1244,6 +1244,7 @@ skin_window_create( SkinLayout*  slayout, int  x, int  y, double  scale, int  no
         skin_window_free(window);
         return NULL;
     }
+    fprintf(stderr, "calling SDL_WM_SetPos(%d, %d) in line:%d\n", x, y, __LINE__);
     SDL_WM_SetPos( x, y );
 
     /* Check that the window is fully visible */
@@ -1266,6 +1267,7 @@ skin_window_create( SkinLayout*  slayout, int  x, int  y, double  scale, int  no
             new_y = 0;
 
         /* Done */
+        fprintf(stderr, "calling SDL_WM_SetPos(%d, %d) in line:%d\n", new_x, new_y, __LINE__);
         SDL_WM_SetPos(new_x, new_y);
         dprint( "emulator window was out of view and was recentered\n" );
     }
@@ -1381,6 +1383,7 @@ skin_window_resize( SkinWindow*  window )
             exit(1);
         }
 
+        fprintf(stderr, "calling SDL_WM_SetPos(%d, %d) in line:%d\n", window_x, window_y, __LINE__);
         SDL_WM_SetPos( window_x, window_y );
 
         window->effective_scale = scale;
@@ -1516,7 +1519,11 @@ idle_do_vibrate( SkinWindow*  window )
 #define VIBRATION_FACTOR 5
     new_x = window->x_pos + vector[runs][0] * VIBRATION_FACTOR;
     new_y = window->y_pos + vector[runs][1] * VIBRATION_FACTOR;
+    fprintf(stderr, "vibrate: %d, %d => %d, %d\n",
+            window->x_pos, window->y_pos, new_x, new_y);
     SDL_WM_SetPos(new_x, new_y);
+    SDL_WM_GetPos(&new_x, &new_y);
+    fprintf(stderr, "then: %d, %d\n", new_x, new_y);
 }
 
 void
