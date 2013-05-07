@@ -64,6 +64,7 @@ typedef struct ASimCardRec_ {
     char        pin[ A_SIM_PIN_SIZE+1 ];
     char        puk[ A_SIM_PUK_SIZE+1 ];
     int         pin_retries;
+    int         puk_retries;
     int         port;
     int         instance_id;
 
@@ -84,6 +85,7 @@ asimcard_create(int port, int instance_id)
     ASimCard  card    = &_s_card[instance_id];
     card->status      = A_SIM_STATUS_READY;
     card->pin_retries = 0;
+    card->puk_retries = 0;
     strncpy( card->pin, "0000", sizeof(card->pin) );
     strncpy( card->puk, "12345678", sizeof(card->puk) );
     card->port = port;
@@ -139,14 +141,12 @@ void
 asimcard_set_pin( ASimCard  sim, const char*  pin )
 {
     strncpy( sim->pin, pin, A_SIM_PIN_SIZE );
-    sim->pin_retries = 0;
 }
 
 void
 asimcard_set_puk( ASimCard  sim, const char*  puk )
 {
     strncpy( sim->puk, puk, A_SIM_PUK_SIZE );
-    sim->pin_retries = 0;
 }
 
 
@@ -163,9 +163,10 @@ asimcard_check_pin( ASimCard  sim, const char*  pin )
         return 1;
     }
 
-    if (sim->status != A_SIM_STATUS_READY) {
-        if (++sim->pin_retries == 3)
-            sim->status = A_SIM_STATUS_PUK;
+    if (++sim->pin_retries == A_SIM_PIN_RETRIES) {
+        if (sim->status != A_SIM_STATUS_READY) {
+            sim->status = 0;
+        }
     }
     return 0;
 }
@@ -181,14 +182,20 @@ asimcard_check_puk( ASimCard  sim, const char* puk, const char*  pin )
         strncpy( sim->puk, puk, A_SIM_PUK_SIZE );
         strncpy( sim->pin, pin, A_SIM_PIN_SIZE );
         sim->status      = A_SIM_STATUS_READY;
-        sim->pin_retries = 0;
+        sim->puk_retries = 0;
         return 1;
     }
 
-    if ( ++sim->pin_retries == 6 ) {
+    if ( ++sim->puk_retries == A_SIM_PUK_RETRIES ) {
         sim->status = A_SIM_STATUS_ABSENT;
     }
     return 0;
+}
+
+int
+asimcard_get_pin_retries( ASimCard sim )
+{
+    return A_SIM_PIN_RETRIES - sim->pin_retries;
 }
 
 typedef enum {
@@ -710,15 +717,26 @@ asimcard_ef_init( ASimCard card )
     // PLMN Network Name(6FC5):
     //   Record size: 0x18
     //   Record count: 0x0a
+    //   Record:
+    //     PNN 1: Fullname: "AT&T"
     // @see 3GPP TS 31.102 section 4.2.58 EFpnn (PLMN Network Name)
     // @see 3GPP TS 24.008
-    // FIXME: bug 835255 - marionette test will fail when enable EFpnn
-    /*
     ef = asimcard_ef_new_linear(0x6fc5, SIM_FILE_READ_ONLY, 0x18);
     asimcard_ef_update_linear(ef, 0x01, "43058441aa890affffffffffffffffffffffffffffffffff");
     asimcard_ef_update_linear(ef, 0x0a, "ffffffffffffffffffffffffffffffffffffffffffffffff");
     asimcard_ef_add(card, ef);
-    */
+
+    // Operator PLMN List (6FC6):
+    //   Record size: 0x18
+    //   Record count: 0x0a
+    //   Record:
+    //     MCC = 310, MNC = 070, PNN = 01
+    // @see 3GPP TS 31.102 section 4.2.59 EFopl (Operator PLMN List)
+    // @see 3GPP TS 24.008
+    ef = asimcard_ef_new_linear(0x6fc6, SIM_FILE_READ_ONLY, 0x18);
+    asimcard_ef_update_linear(ef, 0x01, "1300700000fffe01ffffffffffffffffffffffffffffffff");
+    asimcard_ef_update_linear(ef, 0x0a, "ffffffffffffffffffffffffffffffffffffffffffffffff");
+    asimcard_ef_add(card, ef);
 
     // MSISDN(6F40):
     //   Record size: 0x20
