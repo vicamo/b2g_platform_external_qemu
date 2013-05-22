@@ -48,6 +48,10 @@ typedef struct {
 static ABluetoothRec _android_bluetooth[MAX_NICS];
 static int cur_bt;
 
+static struct bt_l2cap_device_s *remote_bluetooth[MAX_NICS];
+static int cur_rbt;
+static struct bt_scatternet_s *net; // where local and remote devices coexist
+
 #if DEBUG
 static void
 goldfish_bt_dump(const uint8_t *data,
@@ -235,4 +239,55 @@ goldfish_bt_new_cs(struct HCIInfo *hci)
     cur_bt++;
 
     return cs;
+}
+
+const char*
+goldfish_bt_get(const char *query, char *result)
+{
+    ABluetooth bt = &_android_bluetooth[0];
+    return bt_hci_get(bt->hci, query, result);
+}
+
+void
+goldfish_bt_radd(char *str)
+{
+    if (cur_rbt >= MAX_NICS) {
+        D("goldfish_bt_radd: too many remote devices\n");
+        return;
+    }
+
+    // Get scatternet at first time
+    if (!cur_rbt) {
+        ABluetooth bt = &_android_bluetooth[0];
+        net = bt_hci_get_net(bt->hci);
+    }
+
+    remote_bluetooth[cur_rbt] = (struct bt_l2cap_device_s *)
+                            qemu_mallocz(sizeof(struct bt_l2cap_device_s));
+
+    // Parse str and add remote device to scatternet
+    if (!bt_l2cap_radd(remote_bluetooth[cur_rbt], net, str)) {
+        D("goldfish_bt_radd: free remote_bluetooth[%d]\r\n", cur_rbt);
+        qemu_free(remote_bluetooth[cur_rbt]);
+        return;
+    }
+
+    cur_rbt++;
+}
+
+void
+goldfish_bt_rclr()
+{
+    int i;
+    for (i = 0; i < cur_rbt; i++) {
+        struct bt_device_s *dev = &remote_bluetooth[i]->device;
+        if (dev->lmp_name)
+            qemu_free((void *) dev->lmp_name);
+        qemu_free(remote_bluetooth[i]);
+    }
+    D("goldfish_bt_rclr: removed %d remote devices\r\n", cur_rbt);
+    cur_rbt = 0;
+
+    // Keep only local device in the scatternet
+    net->slave->next = NULL;
 }

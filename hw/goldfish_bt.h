@@ -15,6 +15,9 @@ enum RfkillTypes {
 
 /* hw/goldfish_bt.c */
 CharDriverState* goldfish_bt_new_cs (struct HCIInfo *hci);
+const char* goldfish_bt_get(const char *query, char *result);
+void goldfish_bt_radd(char *str);
+void goldfish_bt_rclr();
 
 /* hw/goldfish_rfkill.c */
 uint32_t android_rfkill_get_blocking();

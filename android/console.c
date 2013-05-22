@@ -3106,6 +3106,72 @@ static const CommandDefRec  rfkill_commands[] =
 /********************************************************************************************/
 /********************************************************************************************/
 /*****                                                                                 ******/
+/*****                         B L U E T O O T H     C O M M A N D S                   ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+static int
+do_bt_get( ControlClient  client, char*  args )
+{
+    char buf[18] = "";
+
+    if(!args) {
+        control_write( client, "KO: no property to get\r\n" );
+        return -1;
+    }
+
+    control_write( client, "%s\r\n", goldfish_bt_get( args, buf ));
+    return 0;
+}
+
+static int
+do_bt_radd( ControlClient  client, char*  args )
+{
+    if(!args) {
+        control_write( client, "KO: empty remote device info\r\n" );
+        return -1;
+    }
+
+    goldfish_bt_radd( args );
+    return 0;
+}
+
+static int
+do_bt_rclr( ControlClient  client, char*  args )
+{
+    goldfish_bt_rclr();
+    return 0;
+}
+
+static const CommandDefRec  bt_commands[] =
+{
+    { "get", "retrieve BT local property",
+      "'bt get <prop>' retrieves BT local properties\r\n"
+      "the <prop> parameter is the property to retrieve\r\n"
+      "   enable              BT is enabled?\r\n"
+      "   addr                BT MAC address\r\n"
+      "   name                BT device name\r\n"
+      "   discoverable        BT device is discoverable?\r\n"
+      "   discovering         BT device is discovering?\r\n", NULL,
+      do_bt_get, NULL },
+
+    { "radd", "insert a remote BT device",
+      "'bt radd <prop_str>' inserts a remote BT device\r\n"
+      "the <prop_str> parameter is the string of device properties,\r\n"
+      "in the form of \"<MAC address>,<device name>\"\r\n", NULL,
+      do_bt_radd, NULL },
+
+    { "rclr", "remove all remote BT devices",
+      "'bt rclr' removes all remote BT devices\r\n", NULL,
+      do_bt_rclr, NULL },
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
+
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
 /*****                           M A I N   C O M M A N D S                             ******/
 /*****                                                                                 ******/
 /********************************************************************************************/
@@ -3428,8 +3494,8 @@ static const CommandDefRec   main_commands[] =
     { "help|h|?", "print a list of commands", NULL, NULL, do_help, NULL },
 
     { "event", "simulate hardware events",
-    "allows you to send fake hardware events to the kernel\r\n", NULL,
-    NULL, event_commands },
+      "allows you to send fake hardware events to the kernel\r\n", NULL,
+      NULL, event_commands },
 
     { "geo", "Geo-location commands",
       "allows you to change Geo-related settings, or to send GPS NMEA sentences\r\n", NULL,
@@ -3469,16 +3535,16 @@ static const CommandDefRec   main_commands[] =
       NULL, sms_commands },
 
     { "avd", "control virtual device execution",
-    "allows you to control (e.g. start/stop) the execution of the virtual device\r\n", NULL,
-    NULL, vm_commands },
+      "allows you to control (e.g. start/stop) the execution of the virtual device\r\n", NULL,
+      NULL, vm_commands },
 
     { "window", "manage emulator window",
-    "allows you to modify the emulator window\r\n", NULL,
-    NULL, window_commands },
+      "allows you to modify the emulator window\r\n", NULL,
+      NULL, window_commands },
 
     { "qemu", "QEMU-specific commands",
-    "allows to connect to the QEMU virtual machine monitor\r\n", NULL,
-    NULL, qemu_commands },
+      "allows to connect to the QEMU virtual machine monitor\r\n", NULL,
+      NULL, qemu_commands },
 
     { "sensor", "manage emulator sensors",
       "allows you to request the emulator sensors\r\n", NULL,
@@ -3503,6 +3569,10 @@ static const CommandDefRec   main_commands[] =
     { "rfkill", "RFKILL related commands",
       "allows you to modify/retrieve RFKILL status, hardware blocking\r\n", NULL,
       NULL, rfkill_commands },
+
+    { "bt", "Bluetooth related commands",
+      "allows you to retrieve BT status, or add remote devices\r\n", NULL,
+      NULL, bt_commands },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
