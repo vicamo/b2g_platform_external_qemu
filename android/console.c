@@ -26,6 +26,7 @@
 #include "sysemu.h"
 #include "android/android.h"
 #include "cpu.h"
+#include "hw/goldfish_bt.h"
 #include "hw/goldfish_device.h"
 #include "hw/power_supply.h"
 #include "shaper.h"
@@ -1774,6 +1775,41 @@ do_sms_sendpdu( ControlClient  client, char*  args )
     return 0;
 }
 
+static int
+do_sms_smsc( ControlClient  client, char*  args )
+{
+    int           ret = 0;
+
+    if (!client->modem) {
+        control_write( client, "KO: modem emulation not running\r\n" );
+        return -1;
+    }
+
+    if (!args) {
+        // Get
+        SmsAddress pSmscRec;
+        char       smsc[32] = {0};
+
+        pSmscRec = amodem_get_smsc_address( client->modem );
+        ret = sms_address_to_str( pSmscRec, smsc, sizeof(smsc) - 1);
+        if (!ret) {
+            control_write( client, "KO: SMSC address unvailable\r\n" );
+            return -1;
+        }
+
+        control_write( client, "\"%s\",%u\r\n", smsc, pSmscRec->toa );
+        return 0;
+    }
+
+    // Set
+    if (amodem_set_smsc_address( client->modem, args, 0 )) {
+        control_write( client, "KO: Failed to set SMSC address\r\n" );
+        return -1;
+    }
+
+    return 0;
+}
+
 static const CommandDefRec  sms_commands[] =
 {
     { "send", "send inbound SMS text message",
@@ -1785,6 +1821,11 @@ static const CommandDefRec  sms_commands[] =
     "(used internally when one emulator sends SMS messages to another instance).\r\n"
     "you probably don't want to play with this at all\r\n", NULL,
     do_sms_sendpdu, NULL },
+
+    { "smsc", "get/set smsc address",
+    "'sms smsc <smscaddress>' allows you to simulate set smsc address\r\n"
+    "'sms smsc' allows you to simulate get smsc address\r\n", NULL,
+    do_sms_smsc, NULL},
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
@@ -3001,6 +3042,192 @@ static const CommandDefRec  cbs_commands[] =
 /********************************************************************************************/
 /********************************************************************************************/
 /*****                                                                                 ******/
+/*****                         R F K I L L    C O M M A N D S                          ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+static const char* rfkill_type_names[RFKILL_TYPE_MAX] = {
+    /* see hw/goldfish_bt.h, enum RfkillTypes */
+    "wlan", "bluetooth", "uwb", "wimax", "wwan"
+};
+
+static RfkillTypes
+get_rfkill_type_by_name( const char*  name, size_t  len )
+{
+    int type;
+
+    for (type = 0; type < RFKILL_TYPE_MAX; type++) {
+        if (!strncmp(name, rfkill_type_names[type], len)) {
+            return type;
+        }
+    }
+
+    return RFKILL_TYPE_MAX;
+}
+
+static int
+do_rfkill_state( ControlClient  client, char*  args )
+{
+    char buf[32];
+    const char *name;
+    uint32_t blocking, hw_block, mask;
+    int type, state;
+
+    blocking = android_rfkill_get_blocking();
+    hw_block = android_rfkill_get_hardware_block();
+
+    if (args) {
+        type = get_rfkill_type_by_name(args, strlen(args));
+        if (type == RFKILL_TYPE_MAX) {
+            control_write( client, "KO: unknown <type>\r\n" );
+            return -1;
+        }
+
+        mask = RFKILL_TYPE_BIT(type);
+        state = hw_block & mask ? 2 : (blocking & mask ? 0 : 1);
+        snprintf(buf, sizeof buf, "%d\r\n", state);
+        control_write( client, buf );
+        return 0;
+    }
+
+    for (type = 0; type < RFKILL_TYPE_MAX; type++) {
+        name = rfkill_type_names[type];
+        mask = RFKILL_TYPE_BIT(type);
+        state = hw_block & mask ? 2 : (blocking & mask ? 0 : 1);
+        snprintf(buf, sizeof buf, "%s: %d\r\n", name, state);
+        control_write( client, buf );
+    }
+
+    return 0;
+}
+
+static int
+do_rfkill_block( ControlClient  client, char*  args )
+{
+    char *p;
+    int type = RFKILL_TYPE_MAX;
+    uint32_t hw_block;
+
+    if (args) {
+        p = strchr(args, ' ');
+        int len = p ? (p - args) : strlen(args);
+        type = get_rfkill_type_by_name(args, len);
+    }
+
+    if (type == RFKILL_TYPE_MAX) {
+        control_write( client, "KO: unknown <type>\r\n" );
+        return -1;
+    }
+
+    hw_block = android_rfkill_get_hardware_block();
+
+    if (p) {
+        while (*p && isspace(*p)) p++;
+
+        if (!strcmp(p, "on")) {
+            hw_block |= RFKILL_TYPE_BIT(type);
+        } else if (!strcmp(p, "off")) {
+            hw_block &= ~RFKILL_TYPE_BIT(type);
+        } else {
+            control_write( client, "KO: unknown <value>\r\n" );
+            return -1;
+        }
+    } else {
+        hw_block |= RFKILL_TYPE_BIT(type);
+    }
+
+    android_rfkill_set_hardware_block(hw_block);
+
+    return 0;
+}
+
+static const CommandDefRec  rfkill_commands[] =
+{
+    { "state", "get current blocking state",
+      "'rfkill state [<type>]' echo blocking status of all or specified <type>. '0' as\r\n"
+      "software blocked, '1' as unblocked, '2' as hardware blocked.\r\n", NULL,
+      do_rfkill_state, NULL },
+
+    { "block", "set hardware block",
+      "'rfkill block <type>[ <value>]' turn on/off hardware block on specified <type>.\r\n", NULL,
+      do_rfkill_block, NULL },
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
+
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
+/*****                         M O D E M   C O M M A N D                               ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+static void
+help_modem_tech( ControlClient  client )
+{
+    int  nn;
+    control_write( client,
+            "'modem tech': allows you to display the current state of emulator modem.\r\n"
+            "'modem tech <technology>': allows you to change the technology of emulator modem.\r\n"
+            "valid values for <technology> are the following:\r\n\r\n" );
+
+    for (nn = 0; ; nn++) {
+        const char* name = android_get_modem_tech_name(nn);
+
+        if (!name) {
+            break;
+        }
+
+        control_write(client, "  %s\r\n", name);
+    }
+    control_write(client, "\r\n");
+}
+
+static int
+do_modem_tech( ControlClient client, char* args )
+{
+    int  nn;
+
+    if (!client->modem) {
+        control_write(client, "KO: modem emulation not running\r\n");
+        return -1;
+    }
+
+    if (!args) {
+        AModemTech technology = amodem_get_technology(client->modem);
+        control_write(client, "%s\r\n", android_get_modem_tech_name(technology));
+        return 0;
+    }
+
+    AModemTech tech = android_parse_modem_tech(args);
+
+    if (tech == A_TECH_UNKNOWN) {
+        control_write(client, "KO: bad modem technology name, try 'help modem tech' for list of valid values\r\n");
+        return -1;
+    }
+
+    if (amodem_set_technology(client->modem, tech)) {
+        control_write(client, "KO: unable to set modem technology to '%s'\r\n", args);
+        return -1;
+    }
+
+    return 0;
+}
+
+static const CommandDefRec  modem_commands[] =
+{
+    { "tech", "query/switch modem technology",
+      NULL, help_modem_tech,
+      do_modem_tech, NULL },
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
+
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
 /*****                           M A I N   C O M M A N D S                             ******/
 /*****                                                                                 ******/
 /********************************************************************************************/
@@ -3394,6 +3621,14 @@ static const CommandDefRec   main_commands[] =
     { "cbs", "Cell Broadcast related commands",
       "allows you to simulate an inbound CBS\r\n", NULL,
       NULL, cbs_commands },
+
+    { "rfkill", "RFKILL related commands",
+      "allows you to modify/retrieve RFKILL status, hardware blocking\r\n", NULL,
+      NULL, rfkill_commands },
+
+    { "modem", "Modem related commands",
+      "allows you to modify/retrieve modem info\r\n", NULL,
+      NULL, modem_commands },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };

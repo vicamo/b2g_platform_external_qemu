@@ -81,9 +81,23 @@
 #define  OPERATOR_ROAMING_MCCMNC  STRINGIFY(OPERATOR_ROAMING_MCC) \
                                   STRINGIFY(OPERATOR_ROAMING_MNC)
 
+#define  SMSC_ADDRESS           "+123456789"
+
+static const struct {
+    const char* name;
+    AModemTech  tech;
+} techs[] = {
+    { "gsm",   A_TECH_GSM },
+    { "wcdma", A_TECH_WCDMA },
+    { "cdma",  A_TECH_CDMA },
+    { "evdo",  A_TECH_EVDO },
+    { "lte",   A_TECH_LTE },
+    { NULL,    A_TECH_UNKNOWN }
+};
+
 int amodem_num_devices = 0;
 
-static const char* _amodem_switch_technology(AModem modem, AModemTech newtech, int32_t newpreferred);
+static int _amodem_switch_technology(AModem modem, AModemTech newtech, int32_t newpreferred);
 static int _amodem_set_cdma_subscription_source( AModem modem, ACdmaSubscriptionSource ss);
 static int _amodem_set_cdma_prl_version( AModem modem, int prlVersion);
 
@@ -124,14 +138,6 @@ static const char*  quote( const char*  line )
 extern AModemTech
 android_parse_modem_tech( const char * tech )
 {
-    const struct { const char* name; AModemTech  tech; }  techs[] = {
-        { "gsm", A_TECH_GSM },
-        { "wcdma", A_TECH_WCDMA },
-        { "cdma", A_TECH_CDMA },
-        { "evdo", A_TECH_EVDO },
-        { "lte", A_TECH_LTE },
-        { NULL, 0 }
-    };
     int  nn;
 
     for (nn = 0; techs[nn].name; nn++) {
@@ -140,6 +146,19 @@ android_parse_modem_tech( const char * tech )
     }
     /* not found */
     return A_TECH_UNKNOWN;
+}
+
+extern const char*
+android_get_modem_tech_name( AModemTech tech )
+{
+    int  nn;
+
+    for (nn = 0; techs[nn].name; nn++) {
+        if (techs[nn].tech == tech)
+            return techs[nn].name;
+    }
+    /* not found */
+    return NULL;
 }
 
 extern ADataNetworkType
@@ -304,6 +323,9 @@ typedef struct AModemRec_
     int prl_version;
 
     const char *emergency_numbers[MAX_EMERGENCY_NUMBERS];
+
+    // SMSC address
+    SmsAddressRec   smsc_address;
 } AModemRec;
 
 
@@ -419,6 +441,7 @@ amodem_end_line( AModem  modem )
 #define NV_EMERGENCY_NUMBER_FMT                    "emergency_number_%d"
 #define NV_PRL_VERSION                         "prl_version"
 #define NV_SREGISTER                           "sregister"
+#define NV_MODEM_SMSC_ADDRESS                  "smsc_address"
 
 #define MAX_KEY_NAME 40
 
@@ -444,7 +467,7 @@ amodem_nvram_get_int( AModem modem, const char *nvname, int defval)
 
     value = aconfig_int(modem->nvram_config, nvname, defval);
     snprintf(strval, MAX_KEY_NAME, "%d", value);
-    D("Setting value of %s to %d (%s)",nvname, value, strval);
+    D("Setting value of %s to %d (%s)\n",nvname, value, strval);
     newvalue = strdup(strval);
     if (!newvalue) {
         newvalue = "";
@@ -460,6 +483,7 @@ amodem_nvram_get_str( AModem modem, const char *nvname, const char *defval)
     const char *value;
 
     value = aconfig_str(modem->nvram_config, nvname, defval);
+    D("Setting value of %s to %s\n",nvname, value);
 
     if (!value) {
         if (!defval)
@@ -551,6 +575,9 @@ amodem_reset( AModem  modem )
 
     modem->subscription_source = _amodem_get_cdma_subscription_source( modem );
     modem->roaming_pref = _amodem_get_cdma_roaming_preference( modem );
+
+    tmp = amodem_nvram_get_str( modem, NV_MODEM_SMSC_ADDRESS, SMSC_ADDRESS);
+    sms_address_from_str( &modem->smsc_address, tmp, strlen(tmp));
 }
 
 static AVoiceCall amodem_alloc_call( AModem   modem );
@@ -619,7 +646,7 @@ amodem_create( int  base_port, int instance_id, AModemUnsolFunc  unsol_func, voi
     modem->base_port    = base_port;
     modem->instance_id  = instance_id;
     start = bufprint_config_file( start, end, "modem-nv-ram-" );
-    start = bufprint( start, end, "%d", modem->base_port );
+    start = bufprint( start, end, "%d-%d", modem->base_port, modem->instance_id );
     modem->nvram_config_filename = strdup( nvfname );
 
     amodem_reset( modem );
@@ -709,6 +736,8 @@ amodem_set_voice_registration( AModem  modem, ARegistrationState  state )
         modem->oper_index = OPERATOR_HOME_INDEX;
     else if (state == A_REGISTRATION_ROAMING)
         modem->oper_index = OPERATOR_ROAMING_INDEX;
+    else
+        modem->oper_index = -1;
 
     switch (modem->voice_mode) {
         case A_REGISTRATION_UNSOL_ENABLED:
@@ -764,8 +793,10 @@ static int
 amodem_nvram_set( AModem modem, const char *name, const char *value )
 {
     aconfig_set(modem->nvram_config, name, value);
+    aconfig_save_file(modem->nvram_config, modem->nvram_config_filename);
     return 0;
 }
+
 static AModemTech
 tech_from_network_type( ADataNetworkType type )
 {
@@ -793,10 +824,8 @@ amodem_set_data_network_type( AModem  modem, ADataNetworkType   type )
     modem->data_network = type;
     amodem_set_data_registration( modem, modem->data_state );
     modemTech = tech_from_network_type(type);
-    if (modem->unsol_func && modemTech != A_TECH_UNKNOWN) {
-        if (_amodem_switch_technology( modem, modemTech, modem->preferred_mask )) {
-            modem->unsol_func( modem->unsol_opaque, modem->out_buff );
-        }
+    if (modemTech != A_TECH_UNKNOWN) {
+        amodem_set_technology( modem, modemTech );
     }
 }
 
@@ -1181,16 +1210,16 @@ chooseTechFromMask( AModem modem, int32_t preferred )
     return A_TECH_UNKNOWN;
 }
 
-static const char*
+static int
 _amodem_switch_technology( AModem modem, AModemTech newtech, int32_t newpreferred )
 {
     D("_amodem_switch_technology: oldtech: %d, newtech %d, preferred: %d. newpreferred: %d\n",
                       modem->technology, newtech, modem->preferred_mask,newpreferred);
-    const char *ret = "+CTEC: DONE";
     assert( modem );
 
     if (!newpreferred) {
-        return "ERROR: At least one technology must be enabled";
+        D("ERROR: At least one technology must be enabled");
+        return -1;
     }
     if (modem->preferred_mask != newpreferred) {
         char value[MAX_KEY_NAME + 1];
@@ -1203,10 +1232,39 @@ _amodem_switch_technology( AModem modem, AModemTech newtech, int32_t newpreferre
     }
 
     if (modem->technology != newtech) {
+        if (!matchPreferredMask(modem->preferred_mask, newtech)) {
+            D("ERROR: Select an unsupported technology");
+            return -1;
+        }
         modem->technology = newtech;
-        ret = amodem_printf(modem, "+CTEC: %d", modem->technology);
+        amodem_nvram_set(modem, NV_MODEM_TECHNOLOGY,
+                         android_get_modem_tech_name(modem->technology));
     }
-    return ret;
+
+    return modem->technology;
+}
+
+AModemTech
+amodem_get_technology( AModem modem )
+{
+    return modem->technology;
+}
+
+int
+amodem_set_technology( AModem modem, AModemTech technology )
+{
+    int current = modem->technology;
+    int ret = _amodem_switch_technology(modem, technology, modem->preferred_mask);
+
+    if (ret < 0) {
+        return -1;
+    }
+
+    if (ret != current) {
+        amodem_unsol(modem, "+CTEC: %d\r", ret);
+    }
+
+    return 0;
 }
 
 static int
@@ -1354,10 +1412,24 @@ handleTech( const char*  cmd, AModem  modem )
         cmd += 1;
     }
     if (havenewtech) {
+        int current = modem->technology;
+        int ret;
+
         D( "cmd: %s\n", cmd );
         if (cmd[0] == ',' && ! parsePreferred( ++cmd, &pt ))
             return amodem_printf( modem, "ERROR: invalid preferred mode" );
-        return _amodem_switch_technology( modem, newtech, pt );
+
+        ret = _amodem_switch_technology( modem, newtech, pt );
+
+        if (ret < 0) {
+            return amodem_printf( modem, "ERROR: unable to set preferred mode" );
+        }
+
+        if (ret != current) {
+            return amodem_printf( modem, "+CTEC: %d", ret );
+        }
+
+        return amodem_printf( modem, "+CTEC: DONE" );
     }
     return amodem_printf( modem, "ERROR: %s: Unknown Technology", cmd + 1 );
 }
@@ -1408,9 +1480,26 @@ handlePrlVersion( const char* cmd, AModem modem )
     return amodem_printf(modem, "ERROR");
 }
 
+static const void
+radio_state_change_event(AModem modem) {
+    ARadioState state = modem->radio_state;
+
+    switch (state) {
+        case A_RADIO_STATE_OFF:
+            amodem_set_voice_registration(modem, A_REGISTRATION_UNREGISTERED);
+            amodem_set_data_registration(modem, A_REGISTRATION_UNREGISTERED);
+            break;
+        case A_RADIO_STATE_ON:
+            amodem_set_voice_registration(modem, A_REGISTRATION_HOME);
+            break;
+    }
+}
+
 static const char*
 handleRadioPower( const char*  cmd, AModem  modem )
 {
+    ARadioState current = modem->radio_state;
+
     if ( !strcmp( cmd, "+CFUN=0" ) )
     {
         /* turn radio off */
@@ -1421,6 +1510,12 @@ handleRadioPower( const char*  cmd, AModem  modem )
         /* turn radio on */
         modem->radio_state = A_RADIO_STATE_ON;
     }
+
+    if (current != modem->radio_state) {
+        sys_timer_set( sys_timer_create(), sys_time_ms() + 1000,
+                       radio_state_change_event, modem );
+    }
+
     return NULL;
 }
 
@@ -2464,6 +2559,84 @@ handleHangup( const char*  cmd, AModem  modem )
     return NULL;
 }
 
+/*
+ * SMSC address AT command handler
+ *
+ * @see 3GPP 27.005 Clause 3.3.1
+ */
+SmsAddress
+amodem_get_smsc_address( AModem  modem )
+{
+    return &modem->smsc_address;
+}
+
+int
+amodem_set_smsc_address( AModem  modem, const char *smsc, unsigned char toa )
+{
+    SmsAddressRec smsc_address;
+    sms_address_from_str( &smsc_address, smsc, strlen(smsc) );
+
+    if (toa == 0 || toa == smsc_address.toa) {
+        memcpy( &modem->smsc_address, &smsc_address, sizeof(SmsAddressRec) );
+        amodem_nvram_set( modem, NV_MODEM_SMSC_ADDRESS, smsc );
+        return 0;
+    }
+
+    return -1;
+}
+
+static const char*
+handleSmscAddress( const char*  cmd, AModem  modem )
+{
+    char address[32] = {0};
+    if ( !memcmp(cmd, "+CSCA?", 6) ) {
+        // Get SMSC address
+        // Return format
+        //   +CSCA: "<sca>",<tosca>
+        sms_address_to_str( &modem->smsc_address, address, sizeof(address) - 1 );
+        return amodem_printf( modem, "+CSCA: \"%s\",%d", address,
+                                                  modem->smsc_address.toa );
+    } else if ( !memcmp(cmd, "+CSCA=", 6) ) {
+        // Set SMSC address
+        // Expect format
+        //   +CSCA="<sca>"[,<tosca>]
+
+        // Get sca
+        const char *addr_begin = strchr(cmd, '"');
+        if (!addr_begin) {
+            goto EndCommand;
+        }
+
+        addr_begin++;
+        const char *addr_end = strchr(addr_begin, '"');
+        if (!addr_end) {
+            goto EndCommand;
+        }
+
+        int addr_len = (int)(addr_end - addr_begin);
+        if (addr_len >= sizeof(address)) {
+            addr_len = sizeof(address) - 1;
+        }
+
+        strncpy(address, addr_begin, addr_len);
+
+        // Get tosca if possible
+        unsigned char toa = 0;
+        const char *toa_pos = strchr(addr_end, ',');
+        if (toa_pos) {
+            toa_pos++;
+            toa = (unsigned char)atoi(toa_pos);
+        }
+
+        if (amodem_set_smsc_address(modem, address, toa)) {
+            goto EndCommand;
+        }
+
+        return NULL;
+    }
+EndCommand:
+    return "+CMS ERROR: 304";
+}
 
 /* a function used to deal with a non-trivial request */
 typedef const char*  (*ResponseHandler)(const char*  cmd, AModem  modem);
@@ -2596,6 +2769,8 @@ static const struct {
     { "+CMGF=0", NULL, handleEndOfInit },  /* now is a goof time to send the current tme and timezone */
     { "%CPI=3", NULL, NULL },
     { "%CSTAT=1", NULL, NULL },
+
+    { "!+CSCA", NULL, handleSmscAddress },
 
     /* end of list */
     {NULL, NULL, NULL}
