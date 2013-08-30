@@ -95,6 +95,32 @@ static const struct {
     { NULL,    A_TECH_UNKNOWN }
 };
 
+static const struct {
+    const char*         name;
+    AModemPreferredMask mask;
+    int                 value;
+} preferred_masks[] = {
+    { "gsm/wcdma",
+      A_PREFERRED_MASK_GSM_WCDMA_PREF,      (1 << A_TECH_GSM) | (1 << A_TECH_WCDMA + A_TECH_PREFERRED) },
+    { "gsm",
+      A_PREFERRED_MASK_GSM,                 (1 << A_TECH_GSM) },
+    { "wcdma",
+      A_PREFERRED_MASK_WCDMA,               (1 << A_TECH_WCDMA) },
+    { "gsm/wcdma-auto",
+      A_PREFERRED_MASK_GSM_WCDMA,           (1 << A_TECH_GSM) | (1 << A_TECH_WCDMA) },
+    { "cdma/evdo",
+      A_PREFERRED_MASK_CDMA_EVDO,           (1 << A_TECH_CDMA) | (1 << A_TECH_EVDO) },
+    { "cdma",
+      A_PREFERRED_MASK_CDMA,                (1 << A_TECH_CDMA) },
+    { "evdo",
+      A_PREFERRED_MASK_EVDO,                (1 << A_TECH_EVDO) },
+    { "gsm/wcdma/cdma/evdo",
+      A_PREFERRED_MASK_GSM_WCDMA_CDMA_EVDO, (1 << A_TECH_GSM) | (1 << A_TECH_WCDMA) |
+                                            (1 << A_TECH_CDMA) | (1 << A_TECH_EVDO) },
+    { NULL,
+      A_PREFERRED_MASK_UNKNOWN,             -1 }
+};
+
 int amodem_num_devices = 0;
 
 static int _amodem_switch_technology(AModem modem, AModemTech newtech, int32_t newpreferred);
@@ -159,6 +185,48 @@ android_get_modem_tech_name( AModemTech tech )
     }
     /* not found */
     return NULL;
+}
+
+extern AModemPreferredMask
+android_parse_modem_preferred_mask( const char* maskName )
+{
+    int nn;
+
+    for (nn = 0; techs[nn].name; nn++) {
+        if (!strcmp(maskName, preferred_masks[nn].name)) {
+            return preferred_masks[nn].mask;
+        }
+    }
+    /* not found */
+    return A_PREFERRED_MASK_UNKNOWN;
+}
+
+extern const char*
+android_get_modem_preferred_mask_name( AModemPreferredMask mask )
+{
+    int nn;
+
+    for (nn = 0; preferred_masks[nn].name; nn++) {
+        if (preferred_masks[nn].mask == mask) {
+            return preferred_masks[nn].name;
+        }
+    }
+    /* not found */
+    return NULL;
+}
+
+static AModemPreferredMask
+android_get_modem_preferred_mask(int32_t maskValue)
+{
+    int nn;
+
+    for (nn = 0; preferred_masks[nn].name; nn++) {
+        if (preferred_masks[nn].value == maskValue) {
+            return preferred_masks[nn].mask;
+        }
+    }
+    /* not found */
+    return A_PREFERRED_MASK_UNKNOWN;
 }
 
 extern ADataNetworkType
@@ -766,6 +834,19 @@ amodem_set_data_registration( AModem  modem, ARegistrationState  state )
 {
     modem->data_state = state;
 
+    /* Any active PDP contexts will be automatically deactivated when the
+       attachment state changes to detached. */
+    if (modem->data_state != A_REGISTRATION_HOME &&
+        modem->data_state != A_REGISTRATION_ROAMING) {
+        int nn;
+        for (nn = 0; nn < MAX_DATA_CONTEXTS; nn++) {
+            ADataContext  data = modem->data_contexts + nn;
+            data->active = 0;
+        }
+        // Trigger an unsol data call list.
+        amodem_unsol(modem, "+CGEV: ME DETACH\r");
+    }
+
     switch (modem->data_mode) {
         case A_REGISTRATION_UNSOL_ENABLED:
             amodem_unsol( modem, "+CGREG: %d,%d\r",
@@ -825,7 +906,7 @@ amodem_set_data_network_type( AModem  modem, ADataNetworkType   type )
     amodem_set_data_registration( modem, modem->data_state );
     modemTech = tech_from_network_type(type);
     if (modemTech != A_TECH_UNKNOWN) {
-        amodem_set_technology( modem, modemTech );
+        amodem_set_technology( modem, modemTech, 0 );
     }
 }
 
@@ -992,9 +1073,7 @@ amodem_send_stk_unsol_proactive_command( AModem  modem, const char* stkCmdPdu )
 static void
 amodem_send_calls_update( AModem  modem )
 {
-   /* despite its name, this really tells the system that the call
-    * state has changed */
-    amodem_unsol( modem, "RING\r" );
+    amodem_unsol( modem, "CALL STATE CHANGED\r" );
 }
 
 
@@ -1022,7 +1101,7 @@ amodem_add_inbound_call( AModem  modem, const char*  number )
     memcpy( call->number, number, len );
     call->number[len] = 0;
 
-    amodem_send_calls_update( modem );
+    amodem_unsol( modem, "RING\r");
     return 0;
 }
 
@@ -1097,7 +1176,7 @@ int amodem_remote_call_busy( AModem  modem, const char*  number )
         return -1;
 
     amodem_free_call(modem, vcall, CALL_FAIL_BUSY);
-    amodem_send_calls_update(modem);
+    amodem_unsol( modem, "NO CARRIER\r");
     return 0;
 }
 
@@ -1111,7 +1190,7 @@ amodem_disconnect_call( AModem  modem, const char*  number )
         return -1;
 
     amodem_free_call( modem, vcall, CALL_FAIL_NORMAL );
-    amodem_send_calls_update(modem);
+    amodem_unsol( modem, "NO CARRIER\r");
     return 0;
 }
 
@@ -1128,7 +1207,7 @@ amodem_clear_call( AModem modem )
         AVoiceCall call = (AVoiceCall) &vcall->call;
         amodem_free_call( modem, call, CALL_FAIL_NORMAL );
     }
-    amodem_send_calls_update(modem);
+    amodem_unsol( modem, "NO CARRIER\r");
 
     return 0;
 }
@@ -1155,6 +1234,46 @@ amodem_set_gsm_location( AModem modem, int lac, int ci )
 
     // Notify device through amodem_unsol(...)
     amodem_set_voice_registration( modem, modem->voice_state );
+}
+
+/** Data
+ **/
+
+static const char*
+amodem_activate_data_call( AModem  modem, int cid, int enable)
+{
+    ADataContext     data;
+    int              id;
+
+    assert( enable ==  0 || enable == 1 );
+
+    id = cid - 1;
+    if (id < 0 || id >= MAX_DATA_CONTEXTS) {
+        // unknown PDP context
+        return "+CME ERROR: 143";
+    }
+
+    data = modem->data_contexts + id;
+    if (data->id <= 0) {
+        // activation rejected, unspecified
+        return "+CME ERROR: 131";
+    }
+
+    if (data->active == enable)
+        return NULL;
+
+    if (enable &&
+        modem->data_state != A_REGISTRATION_HOME &&
+        modem->data_state != A_REGISTRATION_ROAMING) {
+        if (modem->oper_index == OPERATOR_ROAMING_INDEX)
+            amodem_set_data_registration(modem, A_REGISTRATION_ROAMING);
+        else
+            amodem_set_data_registration(modem, A_REGISTRATION_HOME);
+    }
+
+    data->active = enable;
+
+    return NULL;
 }
 
 /** COMMAND HANDLERS
@@ -1233,7 +1352,7 @@ _amodem_switch_technology( AModem modem, AModemTech newtech, int32_t newpreferre
 
     if (modem->technology != newtech) {
         if (!matchPreferredMask(modem->preferred_mask, newtech)) {
-            D("ERROR: Select an unsupported technology");
+            D("ERROR: Select an unsupported technology\n");
             return -1;
         }
         modem->technology = newtech;
@@ -1250,11 +1369,24 @@ amodem_get_technology( AModem modem )
     return modem->technology;
 }
 
+AModemPreferredMask
+amodem_get_preferred_mask( AModem modem )
+{
+    return android_get_modem_preferred_mask(modem->preferred_mask);
+}
+
 int
-amodem_set_technology( AModem modem, AModemTech technology )
+amodem_set_technology( AModem modem, AModemTech technology, AModemPreferredMask preferredMask )
 {
     int current = modem->technology;
-    int ret = _amodem_switch_technology(modem, technology, modem->preferred_mask);
+    int ret;
+
+    if (preferredMask >= A_PREFERRED_MASK_UNKNOWN) {
+        ret = _amodem_switch_technology(modem, technology, modem->preferred_mask);
+    } else {
+        int32_t maskValue = preferred_masks[preferredMask].value;
+        ret = _amodem_switch_technology(modem, technology, maskValue);
+    }
 
     if (ret < 0) {
         return -1;
@@ -1491,6 +1623,7 @@ radio_state_change_event(AModem modem) {
             break;
         case A_RADIO_STATE_ON:
             amodem_set_voice_registration(modem, A_REGISTRATION_HOME);
+            amodem_set_data_registration(modem, A_REGISTRATION_HOME);
             break;
     }
 }
@@ -2049,6 +2182,10 @@ handleGetRemainingRetries( const char* cmd, AModem modem )
       amodem_add_line(modem, "+CPINR: SIM PIN,%d,%d\r\n",
                       asimcard_get_pin_retries(modem->sim),
                       A_SIM_PIN_RETRIES);
+    } else if (!strcmp(cmd, "SIM PUK")) {
+      amodem_add_line(modem, "+CPINR: SIM PUK,%d,%d\r\n",
+                      asimcard_get_puk_retries(modem->sim),
+                      A_SIM_PUK_RETRIES);
     } else {
       // Incorrect parameters
       amodem_add_line( modem, "+CME ERROR: 50\r\n");
@@ -2221,7 +2358,7 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
         data = modem->data_contexts + id;
 
         data->id     = id + 1;
-        data->active = 1;
+        data->active = 0;
         data->type   = type;
         memcpy( data->apn, apn, sizeof(data->apn) );
     }
@@ -2252,10 +2389,35 @@ handleQueryPDPContext( const char* cmd, AModem modem )
 }
 
 static const char*
+handleActivatePDPContext( const char*  cmd, AModem  modem )
+{
+    int enable, cid, items;
+
+    assert( !memcmp( cmd, "+CGACT=", 7 ) );
+
+    cmd += 7;
+    if (cmd[0] == '?') {
+        // +CGACT=? is used to query the list of supported <state>s.
+        return "+CGACT: (0-1)\r\n";
+    }
+
+    items = sscanf(cmd, "%d,%d", &enable, &cid);
+    if (items != 2) {
+        // activation rejected, unspecified
+        return "+CME ERROR: 131";
+    }
+
+    return amodem_activate_data_call(modem, cid, enable);
+}
+
+static const char*
 handleStartPDPContext( const char*  cmd, AModem  modem )
 {
-    /* XXX: TODO: handle PDP start appropriately */
-    return NULL;
+    /* D*99***<n>#
+     * <n> is the <cid> in the +CGDCONT command
+     */
+    cmd += 7;
+    return amodem_activate_data_call(modem, cmd[0] - '0', 1);
 }
 
 
@@ -2271,7 +2433,7 @@ remote_voice_call_event( void*  _vcall, int  success )
     if (!success) {
         /* aargh, the remote emulator probably quitted at that point */
         amodem_free_call(modem, vcall, CALL_FAIL_NORMAL);
-        amodem_send_calls_update(modem);
+        amodem_unsol( modem, "NO CARRIER\r");
     }
 }
 
@@ -2716,7 +2878,7 @@ static const struct {
     { "+CGQREQ=1", NULL, NULL },
     { "+CGQMIN=1", NULL, NULL },
     { "+CGEREP=1,0", NULL, NULL },
-    { "+CGACT=1,0", NULL, NULL },
+    { "!+CGACT=", NULL, handleActivatePDPContext },
     { "D*99***1#", NULL, handleStartPDPContext },
 
     /* see requestDial() */
