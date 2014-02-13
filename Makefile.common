@@ -363,6 +363,7 @@ ifeq ($(HOST_OS),linux)
   CONFIG_ALSA ?= yes
   CONFIG_PULSEAUDIO ?= yes
   CONFIG_ESD  ?= yes
+# CONFIG_BLUEZ ?= yes
 endif
 
 ifeq ($(HOST_OS),freebsd)
@@ -401,6 +402,13 @@ ifeq ($(CONFIG_OSS),yes)
 endif
 
 AUDIO_SOURCES := $(call sort,$(AUDIO_SOURCES:%=audio/%))
+
+ifeq ($(CONFIG_BLUEZ),yes)
+common_LOCAL_CFLAGS += -I/usr/include
+EMULATOR_LIBQEMU_LDLIBS += -lbluetooth
+LIBBLUETOOTH_LDFLAGS := -L/usr/lib/i386-linux-gnu
+LIBBLUETOOTH_LDFLAGS_64 := -L/usr/lib/x86_64-linux-gnu
+endif
 
 common_LOCAL_CFLAGS += -Wno-sign-compare \
                 -fno-strict-aliasing -W -Wall -Wno-unused-parameter \

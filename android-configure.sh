@@ -25,6 +25,7 @@ OPTION_HELP=no
 OPTION_STATIC=no
 OPTION_MINGW=no
 OPTION_MULTISIM=1
+OPTION_BLUEZ=no
 
 GLES_INCLUDE=
 GLES_LIBS=
@@ -690,6 +691,33 @@ echo "#define CONFIG_ANDROID       1" >> $config_h
 
 if [ "$GLES_INCLUDE" -a "$GLES_LIBS" ]; then
     echo "#define CONFIG_ANDROID_OPENGLES 1" >> $config_h
+fi
+
+case $TARGET_OS in
+    linux-*)
+        cat > $TMPC << EOF
+#include <bluetooth/bluetooth.h>
+#include <bluetooth/hci.h>
+#include <bluetooth/hci_lib.h>
+#undef main
+int main( int argc, char** argv ) {
+	return hci_open_dev(0);
+}
+EOF
+        EXTRA_CFLAGS="-I/usr/include"
+        if [ "$OPTION_TRY_64" = "yes" ]; then
+            EXTRA_LDFLAGS="-L/usr/lib/x86_64-linux-gnu"
+        else
+            EXTRA_LDFLAGS="-L/usr/lib/i386-linux-gnu"
+        fi
+        EXTRA_LDFLAGS="$EXTRA_LDFLAGS -lbluetooth"
+        feature_check_link  OPTION_BLUEZ
+        ;;
+esac
+
+if [ "$OPTION_BLUEZ" = "yes" ]; then
+    echo "CONFIG_BLUEZ := true" >> $config_mk
+    echo "#define CONFIG_BLUEZ 1" >> $config_h
 fi
 
 echo "#define MAX_GSM_DEVICES  $OPTION_MULTISIM" >> $config_h
