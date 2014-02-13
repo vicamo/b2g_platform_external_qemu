@@ -363,7 +363,7 @@ ifeq ($(HOST_OS),linux)
   CONFIG_ALSA ?= yes
   CONFIG_PULSEAUDIO ?= yes
   CONFIG_ESD  ?= yes
-# CONFIG_BLUEZ ?= yes
+  CONFIG_BLUEZ ?= yes
 endif
 
 ifeq ($(HOST_OS),freebsd)
