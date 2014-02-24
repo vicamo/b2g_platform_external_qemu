@@ -29,6 +29,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <netinet/in.h>
+#include <netinet/in6.h>
 #include "sms.h"
 #include "net.h"
 #include "remote_call.h"
@@ -290,7 +291,8 @@ typedef struct AVoiceCallRec {
 
 typedef enum {
     A_DATA_IP = 0,
-    A_DATA_PPP
+    A_DATA_PPP,
+    A_DATA_IPV6
 } ADataType;
 
 #define  A_DATA_APN_SIZE  32
@@ -304,6 +306,7 @@ typedef struct {
     char       apn[ A_DATA_APN_SIZE ];
     struct {
         struct in_addr  in;
+        struct in6_addr in6;
     } addr;
 
     struct _ADataNetRec* net;
@@ -321,6 +324,7 @@ typedef struct _ADataNetRec {
 
     struct {
         struct in_addr  in;
+        struct in6_addr in6;
     } addr, gw, dns[ NUM_DNS_PER_RMNET ];
 } ADataNetRec, *ADataNet;
 
@@ -2531,7 +2535,7 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
     ADataContext  data;
     ADataType     type;
     char          apn[A_DATA_APN_SIZE];
-    char          addr[INET_ADDRSTRLEN];
+    char          addr[INET6_ADDRSTRLEN];
     const char*   p;
     int           len;
 
@@ -2564,6 +2568,9 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
     if ( !memcmp( cmd, ",\"IP\"", 5 ) ) {
         type = A_DATA_IP;
         cmd += 5;
+    } else if ( !memcmp( cmd, ",\"IPV6\"", 7 ) ) {
+        type = A_DATA_IPV6;
+        cmd += 7;
     } else
         goto BadCommand;
 
@@ -2607,8 +2614,10 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
     data->active = 0;
     data->type   = type;
     strcpy( data->apn, apn );
-    if (inet_pton( AF_INET, addr, &data->addr.in.s_addr) <= 0) {
-        data->addr.in.s_addr = 0;
+    if (!addr[0] ||
+        (type == A_DATA_IP) && (inet_pton( AF_INET, addr, &data->addr.in) <= 0) ||
+        (type == A_DATA_IPV6) && (inet_pton( AF_INET6, addr, &data->addr.in6) <= 0)) {
+        memset(&data->addr, 0, sizeof data->addr);
     }
 
     return "OK";
@@ -2623,20 +2632,30 @@ handleQueryPDPContext( const char* cmd, AModem modem )
     amodem_begin_line(modem);
     for (nn = 0; nn < MAX_DATA_CONTEXTS; nn++) {
         ADataContext  data = modem->data_contexts + nn;
-        char          addr[INET_ADDRSTRLEN];
+        char          addr[INET6_ADDRSTRLEN];
+        const char*   type;
 
         if (data->id <= 0)
             continue;
 
         /* The read command returns current settings for each defined context. */
-        if (data->addr.in.s_addr) {
-            inet_ntop( AF_INET, &data->addr.in, addr, sizeof addr);
+        if (data->type == A_DATA_IP) {
+            type = "IP";
+            if (data->addr.in.s_addr) {
+                inet_ntop( AF_INET, &data->addr.in, addr, sizeof addr);
+            }
+        } else if (data->type == A_DATA_IPV6) {
+            type = "IPV6";
+            if (data->addr.in6.s6_addr32[0]) {
+                inet_ntop( AF_INET6, &data->addr.in, addr, sizeof addr);
+            }
         } else {
+            type = "PPP";
             addr[0] = '\0';
         }
         amodem_add_line( modem, "+CGDCONT: %d,\"%s\",\"%s\",\"%s\",0,0\r\n",
                          data->id,
-                         data->type == A_DATA_IP ? "IP" : "PPP",
+                         type,
                          data->apn,
                          addr );
     }
@@ -2689,7 +2708,8 @@ handleQueryPDPDynamicProp( const char* cmd, AModem modem )
         }
 
         ADataNet net = context->net;
-        char     addr[INET_ADDRSTRLEN];
+        char     addr[INET6_ADDRSTRLEN];
+        int      mask;
 
         if ( entries > 1 )
             amodem_add_line( modem, "\r\n" );
@@ -2699,10 +2719,20 @@ handleQueryPDPDynamicProp( const char* cmd, AModem modem )
         amodem_add_line( modem, "+CGCONTRDP: %d,%d,\"%s\"",
                          context->id, bearer_id, context->apn );
 
-        inet_ntop( AF_INET, &net->addr.in, addr, sizeof addr);
-        amodem_add_line( modem, ",\"%s/24\"", addr );
-        inet_ntop( AF_INET, &net->gw.in, addr, sizeof addr);
+        if (context->type == A_DATA_IP) {
+            inet_ntop( AF_INET, &net->addr.in, addr, sizeof addr);
+        } else {
+            inet_ntop( AF_INET6, &net->addr.in6, addr, sizeof addr);
+        }
+        amodem_add_line( modem, ",\"%s/%d\"", addr );
+
+        if (context->type == A_DATA_IP) {
+            inet_ntop( AF_INET, &net->gw.in, addr, sizeof addr);
+        } else {
+            inet_ntop( AF_INET6, &net->gw.in, addr, sizeof addr);
+        }
         amodem_add_line( modem, ",\"%s\"", addr );
+
         for ( j = 0; j < NUM_DNS_PER_RMNET; j++ ) {
             if (!net->dns[j].in.s_addr) {
                 break;
