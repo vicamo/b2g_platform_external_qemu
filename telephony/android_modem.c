@@ -291,7 +291,8 @@ typedef struct AVoiceCallRec {
 typedef enum {
     A_DATA_IP = 0,
     A_DATA_PPP,
-    A_DATA_IPV6
+    A_DATA_IPV6,
+    A_DATA_IPV4V6
 } ADataType;
 
 typedef struct {
@@ -2632,6 +2633,8 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
         amodem_begin_line( modem );
         amodem_add_line( modem, "+CGDCONT: (1-%d),\"IP\",,,(0-2),(0-4)",
                          MAX_DATA_CONTEXTS );
+        amodem_add_line( modem, "+CGDCONT: (1-%d),\"IPV4V6\",,,(0-2),(0-4)",
+                         MAX_DATA_CONTEXTS );
         amodem_add_line( modem, "+CGDCONT: (1-%d),\"IPV6\",,,(0-2),(0-4)",
                          MAX_DATA_CONTEXTS );
         return amodem_end_line( modem );
@@ -2678,6 +2681,9 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
     } else if ( !memcmp( cmd, ",\"IPV6\"", 7 ) ) {
         type = A_DATA_IPV6;
         cmd += 7;
+    } else if ( !memcmp( cmd, ",\"IPV4V6\"", 9 ) ) {
+        type = A_DATA_IPV4V6;
+        cmd += 9;
     } else
         goto BadCommand;
 
@@ -2708,6 +2714,10 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
         if ( p == NULL )
             goto BadCommand;
 
+        /* Don't know how to handle IPV4V6 <PDP_addr> here. */
+        if (type == A_DATA_IPV4V6)
+            goto BadCommand;
+
         len = p - cmd;
         if ( !len || len >= sizeof(addr) )
             goto BadCommand;
@@ -2735,7 +2745,7 @@ BadCommand:
 static const char*
 handleQueryPDPContext( const char* cmd, AModem modem )
 {
-    static const char* type_names[] = {"IP", "PDP", "IPV6"};
+    static const char* type_names[] = {"IP", "PDP", "IPV6", "IPV4V6"};
 
     int  nn;
     amodem_begin_line(modem);
@@ -2784,11 +2794,40 @@ handleQueryPDPDynamicProp( const char* cmd, AModem modem )
     return amodem_end_line( modem );
 }
 
+static void
+appendPDPDynamicProp( AModem modem, ADataContext context, ADataType type )
+{
+    ADataNet    net = context->net;
+    char        addr[INET6_ADDRSTRLEN * 2];
+    const char *bearer_id;
+    int         i;
+
+    /* This is a dirty hack for passing kernel netif num to rild. */
+    bearer_id = net->nd->name + strlen("rmnet.");
+    amodem_add_line( modem, "+CGCONTRDP: %d,%s,\"%s\"",
+                     context->id, bearer_id, context->apn );
+
+    amodem_add_line( modem, ",\"%s\"",
+                     format_inet_addr(type, &net->addr, 1, addr, sizeof addr) );
+    amodem_add_line( modem, ",\"%s\"",
+                     format_inet_addr(type, &net->gw, 0, addr, sizeof addr) );
+
+    for ( i = 0; i < NUM_DNS_PER_RMNET; i++ ) {
+        if (!net->dns[i].in.s_addr) {
+            break;
+        }
+        amodem_add_line( modem, ",\"%s\"",
+                         format_inet_addr(type, &net->dns[i], 0, addr, sizeof addr) );
+    }
+
+    amodem_add_line( modem, "\r\n" );
+}
+
 static const char*
 handleListPDPDynamicProp( const char* cmd, AModem modem )
 {
     int cid = -1;
-    int i, j, entries;
+    int i, entries;
 
     assert( !memcmp( cmd, "+CGCONTRDP", 10 ) );
 
@@ -2814,30 +2853,14 @@ handleListPDPDynamicProp( const char* cmd, AModem modem )
         if ( cid > 0 && context->id != cid )
             continue;
 
-        ++entries;
-
-        ADataNet net = context->net;
-        char     addr[INET6_ADDRSTRLEN * 2];
-
-        /* This is a dirty hack for passing kernel netif num to rild. */
-        const char* bearer_id = net->nd->name + strlen("rmnet.");
-        amodem_add_line( modem, "+CGCONTRDP: %d,%s,\"%s\"",
-                         context->id, bearer_id, context->apn );
-
-        amodem_add_line( modem, ",\"%s\"",
-                         format_inet_addr(context->type, &net->addr, 1, addr, sizeof addr) );
-        amodem_add_line( modem, ",\"%s\"",
-                         format_inet_addr(context->type, &net->gw, 0, addr, sizeof addr) );
-
-        for ( j = 0; j < NUM_DNS_PER_RMNET; j++ ) {
-            if (!net->dns[j].in.s_addr) {
-                break;
-            }
-            amodem_add_line( modem, ",\"%s\"",
-                             format_inet_addr(context->type, &net->dns[j], 0, addr, sizeof addr) );
+        if (context->type == A_DATA_IP || context->type == A_DATA_IPV4V6) {
+            ++entries;
+            appendPDPDynamicProp( modem, context, A_DATA_IP);
         }
-
-        amodem_add_line( modem, "\r\n" );
+        if (context->type == A_DATA_IPV6 || context->type == A_DATA_IPV4V6) {
+            ++entries;
+            appendPDPDynamicProp( modem, context, A_DATA_IPV6);
+        }
     }
 
     if ( cid > 0 && !entries ) {
