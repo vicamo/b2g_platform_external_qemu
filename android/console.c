@@ -108,11 +108,12 @@ typedef struct ControlClientRec_
 
     /**
      * Currently referred modem device. Each control client have their own
-     * modem device pointer to the one it's referring to. This pointer might be
-     * NULL so every command handler should check its validity every time
-     * referring to it. Its value is only modified by 'mux modem <N>'.
+     * modem|bt device pointer to the one it's referring to. This pointer might
+     * be NULL so every command handler should check its validity every time
+     * referring to it. Its value is only modified by 'mux <type> <id>'.
      */
     AModem                     modem;
+    ABluetooth                 bt;
 } ControlClientRec;
 
 
@@ -344,7 +345,10 @@ control_client_create( Socket         socket,
         client->global  = global;
         client->sock    = socket;
         client->next    = global->clients;
+
         client->modem   = amodem_get_instance(0);
+        client->bt      = abluetooth_get_instance(0);
+
         global->clients = client;
 
         qemu_set_fd_handler( socket, control_client_read, NULL, client );
@@ -3105,12 +3109,76 @@ do_mux_modem( ControlClient client, char* args )
     return 0;
 }
 
+static int
+do_mux_bt_list( ControlClient client )
+{
+    int id;
+    ABluetooth bt;
+
+    id = 0;
+    while ((bt = abluetooth_get_instance(id++)) != NULL) {
+        struct bt_device_s *dev;
+        char buf[BDADDR_BUF_LEN];
+
+        dev = abluetooth_get_bt_device(bt);
+        if (dev) {
+            ba_to_str(buf, &dev->bd_addr);
+        }
+        control_write(client, "%c %s\n",
+                      (client->bt == bt ? '*' : 'L'),
+                      (dev ? buf : "(null)"));
+    }
+
+    return 0;
+}
+
+static int
+do_mux_bt_set( ControlClient client, char* args )
+{
+    ABluetooth bt;
+    bdaddr_t addr;
+
+    bt = NULL;
+    if (!ba_from_str(&addr, args)) {
+        ABluetooth candidate;
+        int id = 0;
+
+        while ((candidate = abluetooth_get_instance(id++)) != NULL) {
+            struct bt_device_s *dev;
+
+            dev = abluetooth_get_bt_device(candidate);
+            if (dev && !bacmp(&addr, &dev->bd_addr)) {
+                bt = candidate;
+                break;
+            }
+        }
+    }
+
+    if (!bt) {
+        control_write(client, "WARNING: device '%s' is not available\n", args);
+    }
+
+    client->bt = bt;
+    return do_mux_bt_list(client);
+}
+
+static int
+do_mux_bt( ControlClient client, char* args )
+{
+    return args ? do_mux_bt_set(client, args) : do_mux_bt_list(client);
+}
+
 static const CommandDefRec  mux_commands[] =
 {
     { "modem", "select active modem device",
       "'modem <instance index>': select active modem device by instance for further config.\r\n"
       "'modem': display current active modem device.\r\n", NULL,
       do_mux_modem, NULL},
+
+    { "bt", "select active bluetooth device",
+      "'bt <instance index>': select active bluetooth device by instance for further config.\r\n"
+      "'bt': display current active bluetooth device.\r\n", NULL,
+      do_mux_bt, NULL},
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
@@ -3596,6 +3664,296 @@ static const CommandDefRec  modem_commands[] =
 /********************************************************************************************/
 /********************************************************************************************/
 /*****                                                                                 ******/
+/*****                      B L U E T O O T H   C O M M A N D S                        ******/
+/*****                                                                                 ******/
+/********************************************************************************************/
+/********************************************************************************************/
+
+static int
+validate_bt_args_local( ControlClient         client,
+                        char                 *args,
+                        struct bt_device_s  **dev )
+{
+    if (!client->bt) {
+        control_write(client, "KO: bluetooth emulation not running\r\n");
+        return -1;
+    }
+
+    *dev = abluetooth_get_bt_device(client->bt);
+    if (!*dev) {
+        control_write(client, "KO: local device is not configurable\r\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int
+validate_bt_args_bdaddr( ControlClient        client,
+                         char                *args,
+                         struct bt_device_s **dev,
+                         bdaddr_t            *addr,
+                         const bdaddr_t      *default_addr )
+{
+    char *p;
+
+    if (validate_bt_args_local(client, args, dev) < 0) {
+        return -1;
+    }
+
+    if (!args || !(p = strtok(args, " "))) {
+        if (!default_addr) {
+            control_write(client, "KO: missing bluetooth address\r\n");
+            return -1;
+        }
+        bacpy(addr, default_addr);
+    } else if (ba_from_str(addr, p)) {
+        control_write(client, "KO: invalid bluetooth address\r\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int
+validate_bt_args_device( ControlClient         client,
+                         char                 *args,
+                         struct bt_device_s  **local,
+                         struct bt_device_s  **dev,
+                         bdaddr_t             *addr,
+                         const bdaddr_t       *default_addr,
+                         int                   accept_all )
+{
+    if (validate_bt_args_bdaddr(client, args, local, addr, default_addr) < 0) {
+        return -1;
+    }
+
+    if ((accept_all && !bacmp(addr, BDADDR_ALL)) ||
+        !bacmp(addr, BDADDR_LOCAL) ||
+        !bacmp(addr, &(*local)->bd_addr)) {
+        *dev = *local;
+        return 0;
+    }
+
+    *dev = bt_scatternet_find_slave((*local)->net, addr);
+    if (!*dev) {
+        control_write(client, "KO: device not found\r\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int
+do_bt_remote_add( ControlClient client, char* args )
+{
+    struct bt_device_s *dev;
+    bdaddr_t addr;
+    char buf[BDADDR_BUF_LEN];
+
+    if (validate_bt_args_local(client, args, &dev) < 0) {
+        return -1;
+    }
+
+    // Create device within dev->net;
+    dev = bt_remote_device_new(dev->net);
+    if (!dev) {
+        control_write(client, "KO: failed to create remote device\r\n");
+        return -1;
+    }
+
+    ba_to_str(buf, &dev->bd_addr);
+    control_write(client, "%s\r\n", buf);
+    return 0;
+}
+
+static int
+do_bt_remote_remove_device( ControlClient        client,
+                            struct bt_device_s  *dev,
+                            int                  fatal )
+{
+    char buf[BDADDR_BUF_LEN];
+
+    if (bt_device_get_property(dev, "is_remote", NULL, 0) < 0) {
+        if (fatal) {
+            control_write(client, "KO: not a remote device\r\n");
+            return -1;
+        }
+        return 0;
+    }
+
+    ba_to_str(buf, &dev->bd_addr);
+    dev->handle_destroy(dev);
+    control_write(client, "%s\r\n", buf);
+
+    return 0;
+}
+
+static void
+do_bt_remote_remove_scatternet( ControlClient            client,
+                                struct bt_scatternet_s  *net )
+{
+    struct bt_device_s *dev, *next;
+
+    dev = net->slave;
+    while (dev) {
+        next = dev->next;
+        do_bt_remote_remove_device(client, dev, 0);
+        dev = next;
+    }
+}
+
+static int
+do_bt_remote_remove( ControlClient client, char* args )
+{
+    struct bt_device_s *local, *dev;
+    bdaddr_t addr;
+
+    if (validate_bt_args_device(client, args, &local, &dev,
+                   &addr, NULL, 1) < 0) {
+        return -1;
+    }
+
+    if (!bacmp(&addr, BDADDR_ALL)) {
+        // Remove all remote devices of current scatter net.
+        do_bt_remote_remove_scatternet(client, local->net);
+        return 0;
+    }
+
+    // Remove only one device.
+    return do_bt_remote_remove_device(client, dev, 1);
+}
+
+static const CommandDefRec bt_remote_commands[] =
+{
+    { "add", "add virtual Bluetooth remote device",
+    "'bt remote add':\r\n"
+    "Add a remote device to the scatternet where the local device lives and return\r\n"
+    "the address of the newly created device.\r\n",
+    NULL, do_bt_remote_add, NULL },
+
+    { "remove", "remove virtual Bluetooth remote device",
+    "'bt remove <bd_addr>':\r\n"
+    "Remove the remote device(s) specified by <bd_addr>.  Use Bluetooth ALL address\r\n"
+    "ff:ff:ff:ff:ff:ff to remove all remote devices the scatternet.\r\n",
+    NULL, do_bt_remote_remove, NULL },
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
+
+static void
+do_bt_list_device( ControlClient        client,
+                   struct bt_device_s  *local,
+                   struct bt_device_s  *dev )
+{
+    char buf[BDADDR_BUF_LEN], type;
+
+    if (dev == local) {
+        type = '*';
+    } else if (bt_device_get_property(dev, "is_remote", NULL, 0) >= 0) {
+        type = 'R';
+    } else {
+        type = 'L';
+    }
+    ba_to_str(buf, &dev->bd_addr);
+    control_write(client, "%c %s\r\n", type, buf);
+}
+
+static int
+do_bt_list( ControlClient client, char* args )
+{
+    struct bt_device_s *local, *dev;
+    bdaddr_t addr;
+
+    if (validate_bt_args_device(client, args, &local, &dev,
+                     &addr, BDADDR_ALL, 1) < 0) {
+        return -1;
+    }
+
+    if (!bacmp(&addr, BDADDR_ALL)) {
+        dev = local->net->slave;
+        while (dev) {
+           do_bt_list_device(client, local, dev);
+           dev = dev->next;
+        }
+
+        return 0;
+    }
+
+    do_bt_list_device(client, local, dev);
+    return 0;
+}
+
+static int
+enum_prop_callback(void *opaque, const char *prop, const char *value)
+{
+    control_write((ControlClient)opaque, "%s: %s\r\n", prop, value);
+    return 0;
+}
+
+static int
+do_bt_property( ControlClient client, char* args )
+{
+    struct bt_device_s *local, *dev;
+    bdaddr_t addr;
+    char *p, *v;
+
+    if (validate_bt_args_device(client, args, &local, &dev,
+                    &addr, BDADDR_LOCAL, 0) < 0) {
+        return -1;
+    }
+
+    p = strtok(NULL, " ");
+    if (!p) {
+        return bt_device_enumerate_properties(dev, enum_prop_callback, client);
+    }
+
+    v = strtok(NULL, " ");
+    if (!v) {
+        char buf[1024];
+        if (bt_device_get_property(dev, p, buf, sizeof buf) < 0) {
+            control_write(client, "KO: invalid property '%s'\r\n", p);
+            return -1;
+        }
+
+        control_write(client, "%s: %s\r\n", p, buf);
+        return 0;
+    }
+
+    if (bt_device_set_property(dev, p, v) < 0) {
+        control_write(client, "KO: invalid property '%s' or value '%s'\r\n", p, v);
+        return -1;
+    }
+
+    return 0;
+}
+
+static const CommandDefRec bt_commands[] =
+{
+    { "list", "list scatternet devices",
+    "'bt list [<bd_addr>]':\r\n"
+    "List a device within the same scatternet with current local device. If <bd_addr>\r\n"
+    "is omitted, Bluetooth ALL address ff:ff:ff:ff:ff:ff is assumed.\r\n",
+    NULL, do_bt_list, NULL },
+
+    { "property", "get/set device property",
+    "'bt property [<bd_addr> [<prop> [value]]]':\r\n"
+    "Set property <prop> on device <bd_addr> to <value>.\r\n"
+    "If <value> is omitted, show the property <prop> of device <bd_addr>.\r\n"
+    "If both <prop> and <value> are omitted, enumerate all properties of device\r\n"
+    "<bd_addr>.  If <bd_addr> is also omitted, Bluetooth LOCAL address\r\n"
+    "ff:ff:ff:00:00:00 is assumed.\r\n",
+    NULL, do_bt_property, NULL },
+
+    { "remote", "manage Bluetooth virtual remote devices", NULL,
+    NULL, NULL, bt_remote_commands },
+
+    { NULL, NULL, NULL, NULL, NULL, NULL }
+};
+
+/********************************************************************************************/
+/********************************************************************************************/
+/*****                                                                                 ******/
 /*****                           M A I N   C O M M A N D S                             ******/
 /*****                                                                                 ******/
 /********************************************************************************************/
@@ -4001,6 +4359,10 @@ static const CommandDefRec   main_commands[] =
     { "modem", "Modem related commands",
       "allows you to modify/retrieve modem info\r\n", NULL,
       NULL, modem_commands },
+
+    { "bt", "Bluetooth related commands",
+      "allows you to retrieve BT status or add/remove remote devices\r\n", NULL,
+      NULL, bt_commands },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
