@@ -1539,14 +1539,18 @@ do_gsm_signal( ControlClient  client, char*  args )
       int     params[ NUM_SIGNAL_PARAMS ];
 
       static  int  last_ber = 99;
+      int     rssi, ber;
 
       if (!client->modem) {
           control_write( client, "KO: modem emulation not running\r\n" );
           return -1;
       }
 
-      if (!p)
-          p = "";
+      if (!p) {
+          amodem_get_signal_strength( client->modem, &rssi, &ber );
+          control_write( client, "rssi = %d\r\nber = %d\r\n", rssi, ber );
+          return 0;
+      }
 
       /* tokenize */
       while (*p) {
@@ -1573,7 +1577,7 @@ do_gsm_signal( ControlClient  client, char*  args )
           return -1;
       }
 
-      int rssi = params[SIGNAL_RSSI];
+      rssi = params[SIGNAL_RSSI];
       if ((rssi < 0 || rssi > 31) && rssi != 99) {
           control_write( client, "KO: invalid RSSI - must be 0..31 or 99\r\n");
           return -1;
@@ -1581,7 +1585,7 @@ do_gsm_signal( ControlClient  client, char*  args )
 
       /* check ber is 0..7 or 99 */
       if (top_param >= SIGNAL_BER) {
-          int ber = params[SIGNAL_BER];
+          ber = params[SIGNAL_BER];
           if ((ber < 0 || ber > 7) && ber != 99) {
               control_write( client, "KO: invalid BER - must be 0..7 or 99\r\n");
               return -1;
@@ -1593,6 +1597,74 @@ do_gsm_signal( ControlClient  client, char*  args )
 
       return 0;
   }
+
+static int
+do_gsm_lte_signal( ControlClient  client, char*  args )
+{
+      enum { LTE_SIGNAL_RXLEV = 0, LTE_SIGNAL_RSRP, LTE_SIGNAL_RSSNR, NUM_LTE_SIGNAL_PARAMS };
+      char*   p = args;
+      int     top_param = -1;
+      int     params[ NUM_LTE_SIGNAL_PARAMS ];
+      int     rxlev, rsrp, rssnr;
+
+      if (!client->modem) {
+          control_write( client, "KO: modem emulation not running\r\n" );
+          return -1;
+      }
+
+      if (!p) {
+          amodem_get_lte_signal_strength( client->modem, &rxlev, &rsrp, &rssnr );
+          control_write( client, "rxlev = %d\r\nrsrp = %d\r\nrssnr = %d\r\n", rxlev, rsrp, rssnr );
+          return 0;
+      }
+
+      /* tokenize */
+      while (*p) {
+          char*   end;
+          int  val = strtol( p, &end, 10 );
+
+          if (end == p) {
+              control_write( client, "KO: argument '%s' is not a number\n", p );
+              return -1;
+          }
+
+          params[++top_param] = val;
+          if (top_param + 1 == NUM_LTE_SIGNAL_PARAMS)
+              break;
+
+          p = end;
+          while (*p && (p[0] == ' ' || p[0] == '\t'))
+              p += 1;
+      }
+
+      /* sanity check */
+      if (top_param < LTE_SIGNAL_RSSNR) {
+          control_write( client, "KO: not enough arguments: see 'help gsm lte_signal' for details\r\n" );
+          return -1;
+      }
+
+      rxlev = params[LTE_SIGNAL_RXLEV];
+      if ((rxlev < 0 || rxlev > 63) && rxlev != 99) {
+          control_write( client, "KO: invalid rxlev - must be 0..63 or 99\r\n");
+          return -1;
+      }
+
+      rsrp = params[LTE_SIGNAL_RSRP];
+      if ((rsrp < 44 || rsrp > 140) && rsrp != 65535) {
+          control_write( client, "KO: invalid rsrp - must be 44..140 or 65535\r\n");
+          return -1;
+      }
+
+      rssnr = params[LTE_SIGNAL_RSSNR];
+      if ((rssnr < -200 || rssnr > 300) && rssnr != 65535) {
+          control_write( client, "KO: invalid rssnr - must be -200..300 or 65535\r\n");
+          return -1;
+      }
+
+      amodem_set_lte_signal_strength( client->modem, rxlev, rsrp, rssnr );
+
+      return 0;
+}
 
 static void
 do_gsm_report_creg( ControlClient  client, char*  args)
@@ -1704,10 +1776,17 @@ static const CommandDefRec  gsm_commands[] =
     do_gsm_status, NULL },
 
     { "signal", "set sets the rssi and ber",
-    "'gsm signal <rssi> [<ber>]' changes the reported strength and error rate on next (15s) update.\r\n"
+    "'gsm signal [<rssi> [<ber>]]' changes the reported strength and error rate on next (15s) update.\r\n"
     "rssi range is 0..31 and 99 for unknown\r\n"
     "ber range is 0..7 percent and 99 for unknown\r\n",
     NULL, do_gsm_signal, NULL },
+
+    { "lte_signal", "set sets the LTE rxlev, rsrp and rssnr",
+    "'gsm lte_signal [<rxlev> <rsrp> <rssnr>]' changes the reported LTE rxlev, rsrp and rssnr.\r\n"
+    "rxlev range is 0..63 and 99 for unknown\r\n"
+    "rsrp range is 44..140 dBm and 65535 for invalid\r\n"
+    "rssnr range is -200..300 dB and 65535 for invalid\r\n",
+    NULL, do_gsm_lte_signal, NULL },
 
     { "location", "set lac/ci",
     "'gsm location [<lac> <ci>]' sets or gets the location area code and cell identification.\r\n"
@@ -3206,20 +3285,52 @@ static const CommandDefRec  rfkill_commands[] =
 /********************************************************************************************/
 /********************************************************************************************/
 
-static size_t
+struct nfc_ntf_param {
+    ControlClient client;
+    struct nfc_re* re;
+};
+
+#define NFC_NTF_PARAM_INIT(_client) \
+    { \
+      .client = (_client), \
+      .re = NULL \
+    }
+
+static ssize_t
 nfc_rf_discovery_ntf_cb(void* data,
                         struct nfc_device* nfc,
                         union nci_packet* ntf)
 {
-    return nfc_create_rf_discovery_ntf(data, nfc, ntf);
+    ssize_t res;
+    const struct nfc_ntf_param* param = data;
+    res = nfc_create_rf_discovery_ntf(param->re, nfc, ntf);
+    if (res < 0) {
+        control_write(param->client, "KO: rf_discover failed\r\n");
+        return -1;
+    }
+    return res;
 }
 
-static size_t
+static ssize_t
 nfc_rf_intf_activated_ntf_cb(void* data,
                              struct nfc_device* nfc,
                              union nci_packet* ntf)
 {
-    return nfc_create_rf_intf_activated_ntf(data, nfc, ntf);
+    size_t res;
+    struct nfc_ntf_param* param = data;
+    if (!param->re) {
+        if (!nfc->active_re) {
+            control_write(param->client, "KO: no active remote endpoint\n");
+            return -1;
+        }
+        param->re = nfc->active_re;
+    }
+    res = nfc_create_rf_intf_activated_ntf(param->re, nfc, ntf);
+    if (res < 0) {
+        control_write(param->client, "KO: rf_intf_activated failed\r\n");
+        return -1;
+    }
+    return res;
 }
 
 static int
@@ -3228,51 +3339,74 @@ do_nfc_ntf( ControlClient  client, char*  args )
     char *p;
 
     if (!args) {
+        control_write(client, "KO: no arguments given\r\n");
         return -1;
     }
 
     /* read notification type */
     p = strsep(&args, " ");
-
     if (!p) {
+        control_write(client, "KO: no operation given\r\n");
         return -1;
     }
-
     if (!strcmp(p, "rf_discover")) {
+        size_t i;
+        struct nfc_ntf_param param = NFC_NTF_PARAM_INIT(client);
         /* read remote-endpoint index */
         p = strsep(&args, " ");
-
         if (!p) {
+            control_write(client, "KO: no remote endpoint given\r\n");
             return -1;
         }
-
         errno = 0;
-        size_t i = strtoul(p, NULL, 0);
-
-        if (errno || !(i < sizeof(nfc_res)/sizeof(nfc_res[0])) ) {
+        i = strtoul(p, NULL, 0);
+        if (errno) {
+            control_write(client,
+                          "KO: invalid remote endpoint '%s', error %d(%s)\r\n",
+                          p, errno, strerror(errno));
             return -1;
         }
-
-        goldfish_nfc_send_ntf(nfc_rf_discovery_ntf_cb, nfc_res+i);
+        if (!(i < sizeof(nfc_res)/sizeof(nfc_res[0])) ) {
+            control_write(client, "KO: unknown remote endpoint %zu\r\n", i);
+            return -1;
+        }
+        param.re = nfc_res + i;
+        /* generate RF_DISCOVER_NTF */
+        if (goldfish_nfc_send_ntf(nfc_rf_discovery_ntf_cb, &param) < 0) {
+            /* error message generated in create function */
+            return -1;
+        }
     } else if (!strcmp(p, "rf_intf_activated")) {
-        struct nfc_re *re = NULL;
-
+        struct nfc_ntf_param param = NFC_NTF_PARAM_INIT(client);
         /* read remote-endpoint index */
         p = strsep(&args, " ");
-
         if (p) {
+            size_t i;
             errno = 0;
-            size_t i = strtoul(p, NULL, 0);
-
-            if (errno || !(i < sizeof(nfc_res)/sizeof(nfc_res[0])) ) {
+            i = strtoul(p, NULL, 0);
+            if (errno) {
+                control_write(client,
+                              "KO: invalid remote endpoint '%s', error %d(%s)\r\n",
+                              p, errno, strerror(errno));
                 return -1;
             }
-
-            re = nfc_res + i;
+            if (!(i < sizeof(nfc_res)/sizeof(nfc_res[0]))) {
+                control_write(client, "KO: unknown remote endpoint %zu\r\n", i);
+                return -1;
+            }
+            param.re = nfc_res + i;
+        } else {
+            param.re = NULL;
         }
-
-        /* if re == NULL, active RE will be used */
-        goldfish_nfc_send_ntf(nfc_rf_intf_activated_ntf_cb, re);
+        /* generate RF_INTF_ACTIVATED_NTF; if param.re == NULL,
+         * active RE will be used */
+        if (goldfish_nfc_send_ntf(nfc_rf_intf_activated_ntf_cb, &param) < 0) {
+            /* error message generated in create function */
+            return -1;
+        }
+    } else {
+        control_write(client, "KO: invalid operation '%s'\r\n", p);
+        return -1;
     }
 
     return 0;
@@ -3284,7 +3418,7 @@ struct nfc_dta_write_param {
   const void* data;
 };
 
-static size_t
+static ssize_t
 nfc_dta_write_cb(void* data, struct nfc_device* nfc,
                  union nci_packet* packet)
 {
