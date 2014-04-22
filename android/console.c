@@ -3356,22 +3356,24 @@ static const CommandDefRec  rfkill_commands[] =
 struct nfc_ntf_param {
     ControlClient client;
     struct nfc_re* re;
+    unsigned long ntype;
 };
 
 #define NFC_NTF_PARAM_INIT(_client) \
     { \
       .client = (_client), \
-      .re = NULL \
+      .re = NULL, \
+      .ntype = 0 \
     }
 
 static ssize_t
 nfc_rf_discovery_ntf_cb(void* data,
-                        struct nfc_device* nfc,
+                        struct nfc_device* nfc, size_t maxlen,
                         union nci_packet* ntf)
 {
     ssize_t res;
     const struct nfc_ntf_param* param = data;
-    res = nfc_create_rf_discovery_ntf(param->re, nfc, ntf);
+    res = nfc_create_rf_discovery_ntf(param->re, param->ntype, nfc, ntf);
     if (res < 0) {
         control_write(param->client, "KO: rf_discover failed\r\n");
         return -1;
@@ -3381,7 +3383,7 @@ nfc_rf_discovery_ntf_cb(void* data,
 
 static ssize_t
 nfc_rf_intf_activated_ntf_cb(void* data,
-                             struct nfc_device* nfc,
+                             struct nfc_device* nfc, size_t maxlen,
                              union nci_packet* ntf)
 {
     size_t res;
@@ -3438,6 +3440,25 @@ do_nfc_ntf( ControlClient  client, char*  args )
             control_write(client, "KO: unknown remote endpoint %zu\r\n", i);
             return -1;
         }
+
+        /* read discover notification type */
+        p = strsep(&args, " ");
+        if (!p) {
+            control_write(client, "KO: no discover notification type given\r\n");
+            return -1;
+        }
+        errno = 0;
+        param.ntype = strtoul(p, NULL, 0);
+        if (errno) {
+            control_write(client,
+                          "KO: invalid discover notification type '%s', error %d(%s)\r\n",
+                          p, errno, strerror(errno));
+            return -1;
+        }
+        if (!(param.ntype < NUMBER_OF_NCI_NOTIFICATION_TYPES)) {
+            control_write(client, "KO: unknown discover notification type %zu\r\n", param.ntype);
+            return -1;
+        }
         param.re = nfc_res + i;
         /* generate RF_DISCOVER_NTF */
         if (goldfish_nfc_send_ntf(nfc_rf_discovery_ntf_cb, &param) < 0) {
@@ -3480,80 +3501,14 @@ do_nfc_ntf( ControlClient  client, char*  args )
     return 0;
 }
 
-struct nfc_dta_write_param {
-  uint8_t connid;
-  size_t len;
-  const void* data;
-};
-
-static ssize_t
-nfc_dta_write_cb(void* data, struct nfc_device* nfc,
-                 union nci_packet* packet)
-{
-  const struct nfc_dta_write_param* param;
-
-  param = data;
-
-  return nfc_create_dta(param->data, param->len, nfc, packet);
-}
-
-static int
-do_nfc_dta( ControlClient  client, char*  args )
-{
-    char *p;
-
-    if (!args) {
-        return -1;
-    }
-
-    /* read notification type */
-    p = strsep(&args, " ");
-
-    if (!p) {
-        return -1;
-    }
-
-    if (!strcmp(p, "s") || !strcmp(p, "send") ||
-        !strcmp(p, "w") || !strcmp(p, "wr") || !strcmp(p, "write")) {
-
-        struct nfc_dta_write_param param;
-
-        /* read connection id */
-        p = strsep(&args, " ");
-
-        if (!p) {
-            return -1;
-        }
-
-        errno = 0;
-        param.connid = strtoul(p, NULL, 0);
-
-        if (errno || !param.connid || (param.connid > 254)) {
-            return -1;
-        }
-
-        param.len = strlen(args);
-        param.data = args;
-
-        goldfish_nfc_send_dta(nfc_dta_write_cb, &param);
-    }
-
-    return 0;
-}
-
 static const CommandDefRec  nfc_commands[] =
 {
     { "ntf", "send NCI notification",
-      "'nfc ntf rf_discover <i>' send RC_DISCOVER_NTF for Remote Endpoint <i>\r\n"
+      "'nfc ntf rf_discover <i> <type>' send RC_DISCOVER_NTF for Remote Endpoint <i> with notification type <type>\r\n"
       "'nfc ntf rf_intf_activated' send RC_DISCOVER_NTF for selected Remote Endpoint\r\n"
       "'nfc ntf rf_intf_activated <i>' send RC_DISCOVER_NTF for Remote Endpoint <i>\r\n",
       NULL,
       do_nfc_ntf, NULL },
-
-    { "data", "send and receive NCI data packets",
-      "'nfc data s|send|w|wr|write <connid> <data>' send <data> via active Remote Endpoint's connection <connid>\r\n",
-      NULL,
-      do_nfc_dta, NULL },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };

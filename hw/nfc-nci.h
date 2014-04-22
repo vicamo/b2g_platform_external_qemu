@@ -139,7 +139,12 @@ enum nci_version {
 enum nci_notification_type {
     NCI_LAST_NOTIFICATION = 0,
     NCI_LIMIT_NOTIFICATION = 1,
-    NCI_MORE_NOTIFICATIONS = 2
+    NCI_MORE_NOTIFICATIONS = 2,
+    NUMBER_OF_NCI_NOTIFICATION_TYPES
+};
+
+enum {
+    MAX_NCI_PAYLOAD_LENGTH = 256
 };
 
 struct nci_common_hdr {
@@ -166,7 +171,7 @@ struct nci_data_packet {
 #endif
     uint8_t rfu;
     uint8_t l;
-    uint8_t payload[256];
+    uint8_t payload[MAX_NCI_PAYLOAD_LENGTH];
 } __attribute__((packed));
 
 struct nci_control_packet {
@@ -187,7 +192,7 @@ struct nci_control_packet {
     uint8_t rfu:2;
 #endif
     uint8_t l;
-    uint8_t payload[256];
+    uint8_t payload[MAX_NCI_PAYLOAD_LENGTH];
 };
 
 union nci_packet {
@@ -526,6 +531,7 @@ nfc_create_nci_ntf(union nci_packet* ntf, enum nci_pbf pbf,
 
 size_t
 nfc_create_rf_discovery_ntf(struct nfc_re* re,
+                            enum nci_notification_type type,
                             struct nfc_device* nfc,
                             union nci_packet* ntf);
 
