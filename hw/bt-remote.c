@@ -18,8 +18,8 @@
  */
 
 #include "qemu-common.h"
-#include "net.h"
-#include "bt.h"
+#include "net/net.h"
+#include "hw/bt.h"
 
 static int bt_remote_enumerate_properties(struct bt_device_s *dev,
                 int(*callback)(void*, const char*, const char*), void *opaque)
@@ -49,7 +49,7 @@ static void bt_remote_handle_destroy(struct bt_device_s *dev)
     remote_dev = (struct bt_remote_device_s *)dev;
     bt_l2cap_device_done(&remote_dev->l2cap_dev);
 
-    qemu_free(remote_dev);
+    g_free(remote_dev);
 }
 
 void bt_remote_device_init(struct bt_remote_device_s *remote_dev,
@@ -72,7 +72,7 @@ struct bt_device_s *bt_remote_device_new(struct bt_scatternet_s *net)
 {
     struct bt_remote_device_s *remote_dev;
 
-    remote_dev = qemu_mallocz(sizeof(*remote_dev));
+    remote_dev = g_malloc0(sizeof(*remote_dev));
     if (!remote_dev) {
         return NULL;
     }

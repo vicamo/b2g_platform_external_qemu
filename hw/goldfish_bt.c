@@ -38,11 +38,11 @@
  */
 
 #include "qemu-common.h"
-#include "qemu-char.h"
-#include "charpipe.h"
+#include "sysemu/char.h"
+#include "android/charpipe.h"
 #include "android/utils/debug.h"
 #include <assert.h>
-#include "net.h"
+#include "net/net.h"
 #include "hw/bt.h"
 #include "hw/goldfish_bt.h"
 

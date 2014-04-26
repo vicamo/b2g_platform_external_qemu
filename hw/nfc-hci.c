@@ -12,7 +12,7 @@
 
 #include <assert.h>
 #include <string.h>
-#include "bswap.h"
+#include "qemu/bswap.h"
 #include "nfc-debug.h"
 #include "nfc.h"
 #include "nfc-hci.h"

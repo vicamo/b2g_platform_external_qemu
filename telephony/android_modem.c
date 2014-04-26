@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <netinet/in.h>
 #include "sms.h"
-#include "net.h"
+#include "net/net.h"
 #include "remote_call.h"
 #include "slirp.h"
 

@@ -9,8 +9,8 @@
 ** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ** GNU General Public License for more details.
 */
-#include "qemu_file.h"
-#include "goldfish_device.h"
+#include "migration/qemu-file.h"
+#include "hw/android/goldfish/device.h"
 #include "android/utils/debug.h"
 
 //#define DEBUG 1
@@ -93,7 +93,7 @@ goldfish_rfkill_update_irq(struct rfkill_state *s)
 
 static uint32_t
 goldfish_rfkill_read(void *opaque,
-                     target_phys_addr_t offset)
+                     hwaddr offset)
 {
     struct rfkill_state *s = opaque;
 
@@ -114,7 +114,7 @@ goldfish_rfkill_read(void *opaque,
 
 static void
 goldfish_rfkill_write(void *opaque,
-                      target_phys_addr_t offset,
+                      hwaddr offset,
                       uint32_t value)
 {
     struct rfkill_state *s = opaque;

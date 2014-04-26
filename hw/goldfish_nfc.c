@@ -14,8 +14,8 @@
 #include "nfc.h"
 #include "nfc-hci.h"
 #include "nfc-nci.h"
-#include "qemu_file.h"
-#include "goldfish_device.h"
+#include "migration/qemu-file.h"
+#include "hw/android/goldfish/device.h"
 #include "goldfish_nfc.h"
 
 enum {
@@ -157,7 +157,7 @@ goldfish_nfc_process_ctrl(struct nfc_state* s)
 }
 
 static uint32_t
-goldfish_nfc_read8(void* opaque, target_phys_addr_t offset)
+goldfish_nfc_read8(void* opaque, hwaddr offset)
 {
     struct nfc_state* s = opaque;
 
@@ -189,7 +189,7 @@ goldfish_nfc_read8(void* opaque, target_phys_addr_t offset)
 }
 
 static void
-goldfish_nfc_write8(void* opaque, target_phys_addr_t offset,
+goldfish_nfc_write8(void* opaque, hwaddr offset,
                        uint32_t value)
 {
     struct nfc_state* s = opaque;
