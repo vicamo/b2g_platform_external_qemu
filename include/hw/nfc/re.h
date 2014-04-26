@@ -14,8 +14,8 @@
 #define nfc_re_h
 
 #include "qemu/timer.h"
-#include "llcp.h"
-#include "nfc-rf.h"
+#include "hw/nfc/llcp.h"
+#include "hw/nfc/rf.h"
 
 union nci_packet;
 

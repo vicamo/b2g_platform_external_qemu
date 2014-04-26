@@ -11,7 +11,7 @@
 */
 
 #include <assert.h>
-#include "llcp.h"
+#include "hw/nfc/llcp.h"
 
 /* magic numbers for bcm2079x */
 enum {

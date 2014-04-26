@@ -12,12 +12,12 @@
 
 #include <assert.h>
 #include <string.h>
-#include "goldfish_nfc.h"
-#include "nfc-debug.h"
-#include "nfc.h"
-#include "nfc-nci.h"
-#include "llcp.h"
-#include "nfc-re.h"
+#include "hw/android/goldfish/nfc.h"
+#include "hw/nfc/debug.h"
+#include "hw/nfc/nfc.h"
+#include "hw/nfc/nci.h"
+#include "hw/nfc/llcp.h"
+#include "hw/nfc/re.h"
 
 struct nfc_re nfc_res[3] = {
     INIT_NFC_RE([0], NCI_RF_PROTOCOL_NFC_DEP, NCI_RF_NFC_F_PASSIVE_LISTEN_MODE, "deadbeaf0"),

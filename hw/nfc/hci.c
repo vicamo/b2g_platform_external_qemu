@@ -13,9 +13,9 @@
 #include <assert.h>
 #include <string.h>
 #include "qemu/bswap.h"
-#include "nfc-debug.h"
-#include "nfc.h"
-#include "nfc-hci.h"
+#include "hw/nfc/debug.h"
+#include "hw/nfc/nfc.h"
+#include "hw/nfc/hci.h"
 
 static size_t
 create_evt(union hci_answer* rsp, enum hci_command cmd, unsigned char l)

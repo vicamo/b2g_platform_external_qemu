@@ -44,7 +44,7 @@
 #include <assert.h>
 #include "net/net.h"
 #include "hw/bt.h"
-#include "hw/goldfish_bt.h"
+#include "hw/android/goldfish/bt.h"
 
 //#define DEBUG 1
 

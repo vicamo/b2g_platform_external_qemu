@@ -59,20 +59,11 @@ common_LOCAL_SRC_FILES += \
 #
 
 HW_SOURCES := \
-    bt-remote.c \
-    goldfish_bt.c \
-    goldfish_nfc.c \
-    goldfish_rfkill.c \
-    llcp.c \
-    nfc.c \
-    nfc-hci.c \
-    nfc-nci.c \
-    nfc-re.c \
-    nfc-rf.c \
     bt/core.c \
     bt/hci.c \
     bt/hid.c \
     bt/l2cap.c \
+    bt/remote.c \
     bt/sdp.c \
     block/cdrom.c \
     core/irq.c \
@@ -80,6 +71,7 @@ HW_SOURCES := \
     core/sysbus.c \
     core/dma.c \
     android/goldfish/audio.c \
+    android/goldfish/bt.c \
     android/goldfish/device.c \
     android/goldfish/events_device.c \
     android/goldfish/fb.c \
@@ -87,9 +79,17 @@ HW_SOURCES := \
     android/goldfish/mmc.c   \
     android/goldfish/memlog.c \
     android/goldfish/nand.c \
+    android/goldfish/nfc.c \
     android/goldfish/pipe.c \
+    android/goldfish/rfkill.c \
     android/goldfish/tty.c \
     android/goldfish/vmem.c \
+    nfc/llcp.c \
+    nfc/nfc.c \
+    nfc/hci.c \
+    nfc/nci.c \
+    nfc/re.c \
+    nfc/rf.c \
     pci/pci.c \
     scsi/scsi-disk.c \
     usb/dev-hid.c \

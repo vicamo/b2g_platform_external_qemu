@@ -15,7 +15,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "nfc-rf.h"
+#include "hw/nfc/rf.h"
 
 struct nfc_re;
 

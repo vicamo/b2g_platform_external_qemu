@@ -11,8 +11,8 @@
 */
 
 #include <assert.h>
-#include "nfc-debug.h"
-#include "nfc-rf.h"
+#include "hw/nfc/debug.h"
+#include "hw/nfc/rf.h"
 
 void
 nfc_rf_init(struct nfc_rf* rf, enum nci_rf_interface iface)

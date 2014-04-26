@@ -13,7 +13,7 @@
 #include <assert.h>
 #include <string.h>
 #include "qemu-common.h"
-#include "nfc.h"
+#include "hw/nfc/nfc.h"
 
 void
 nfc_device_init(struct nfc_device* nfc)

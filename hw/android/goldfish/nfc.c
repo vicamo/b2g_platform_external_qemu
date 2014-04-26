@@ -11,12 +11,12 @@
 */
 
 #include "android/utils/debug.h"
-#include "nfc.h"
-#include "nfc-hci.h"
-#include "nfc-nci.h"
+#include "hw/nfc/nfc.h"
+#include "hw/nfc/hci.h"
+#include "hw/nfc/nci.h"
 #include "migration/qemu-file.h"
 #include "hw/android/goldfish/device.h"
-#include "goldfish_nfc.h"
+#include "hw/android/goldfish/nfc.h"
 
 enum {
     OFFSET_STATUS = 0x000, /* R/W, 8 bits */
