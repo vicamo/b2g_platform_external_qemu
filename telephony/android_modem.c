@@ -28,8 +28,11 @@
 #include <time.h>
 #include <assert.h>
 #include <stdio.h>
+#include <netinet/in.h>
 #include "sms.h"
+#include "net.h"
 #include "remote_call.h"
+#include "slirp.h"
 
 #define  DEBUG  1
 
@@ -126,6 +129,7 @@ int amodem_num_devices = 0;
 static int _amodem_switch_technology(AModem modem, AModemTech newtech, int32_t newpreferred);
 static int _amodem_set_cdma_subscription_source( AModem modem, ACdmaSubscriptionSource ss);
 static int _amodem_set_cdma_prl_version( AModem modem, int prlVersion);
+static const char* handleSignalStrength( const char*  cmd, AModem  modem);
 
 #if DEBUG
 static const char*  quote( const char*  line )
@@ -289,19 +293,45 @@ typedef enum {
     A_DATA_PPP
 } ADataType;
 
+typedef struct {
+    struct in_addr  in;
+} AInetAddrRec, *AInetAddr;
+
 #define  A_DATA_APN_SIZE  32
+
+struct _ADataNetRec;
 
 typedef struct {
     int        id;
     int        active;
     ADataType  type;
     char       apn[ A_DATA_APN_SIZE ];
+    AInetAddrRec  addr;
 
+    struct _ADataNetRec* net;
 } ADataContextRec, *ADataContext;
+
+/* AT+CGCONTRDP can only report two DNS server addresses -- primary and
+ * secondary.  See 3GPP TS 27.007 subclause 10.1.23 "PDP context read dynamic
+ * parameters +CGCONTRDP".
+ */
+#define NUM_DNS_PER_RMNET 2
+
+typedef struct _ADataNetRec {
+    struct NICInfo*  nd;
+    ADataContext     context;
+    AInetAddrRec     addr, gw, dns[ NUM_DNS_PER_RMNET ];
+} ADataNetRec, *ADataNet;
 
 /* the spec says that there can only be a max of 4 contexts */
 #define  MAX_DATA_CONTEXTS  4
-#define  MAX_CALLS          4
+/* According to 3GPP 22.083 clause 2.2.1, 3GPP 22.084 clause 1.2.1 and 3GPP
+ * 22.030 clause 6.5.5.6, the case of the maximum number is reached "when
+ * there comes an incoming call while we have already one active(held)
+ * conference call (with 5 remote parties) and one held(active) single call."
+ * The maximum number of voice calls is therefore 7.
+ */
+#define  MAX_CALLS          7
 #define  MAX_EMERGENCY_NUMBERS 16
 
 
@@ -322,6 +352,11 @@ typedef struct AModemRec_
 
     int           rssi;
     int           ber;
+
+    /* LTE signal strength */
+    int           rxlev;
+    int           rsrp;
+    int           rssnr;
 
     /* SMS */
     int           wait_sms;
@@ -394,16 +429,22 @@ typedef struct AModemRec_
 
 
 static void
-amodem_unsol( AModem  modem, const char* format, ... )
+amodem_unsol_buffered( AModem  modem, const char* message )
 {
     if (modem->unsol_func) {
-        va_list  args;
-        va_start(args, format);
-        vsnprintf( modem->out_buff, sizeof(modem->out_buff), format, args );
-        va_end(args);
-
-        modem->unsol_func( modem->unsol_opaque, modem->out_buff );
+        modem->unsol_func( modem->unsol_opaque, message );
     }
+}
+
+static void
+amodem_unsol( AModem  modem, const char* format, ... )
+{
+    va_list  args;
+    va_start(args, format);
+    vsnprintf( modem->out_buff, sizeof(modem->out_buff), format, args );
+    va_end(args);
+
+    amodem_unsol_buffered( modem, modem->out_buff );
 }
 
 void
@@ -594,6 +635,10 @@ amodem_reset( AModem  modem )
     modem->rssi= 7;    // Two signal strength bars
     modem->ber = 99;   // Means 'unknown'
 
+    modem->rxlev = 99;    // Not known or not detectable
+    modem->rsrp  = 65535; // Denotes invalid value
+    modem->rssnr = 65535; // Denotes invalid value
+
     modem->oper_name_index     = amodem_nvram_get_int(modem, NV_OPER_NAME_INDEX, 2);
     modem->oper_selection_mode = amodem_nvram_get_int(modem, NV_SELECTION_MODE, A_SELECTION_AUTOMATIC);
     modem->oper_index          = amodem_nvram_get_int(modem, NV_OPER_INDEX, 0);
@@ -697,6 +742,51 @@ static int  android_modem_state_load(QEMUFile *f, void  *opaque, int version_id)
     return 0; // >=0 Happy
 }
 
+static int _amodem_num_rmnets = 0;
+static ADataNetRec _amodem_rmnets[MAX_DATA_CONTEXTS];
+
+static void
+amodem_init_rmnets()
+{
+    static int inited = 0;
+    int i, j;
+
+    if ( inited ) {
+        return;
+    }
+    inited = 1;
+
+    memset( _amodem_rmnets, 0, sizeof _amodem_rmnets );
+
+    for ( i = 0, j = 0; i < MAX_NICS && j < MAX_DATA_CONTEXTS; i++ ) {
+        struct NICInfo* nd = &nd_table[i];
+        if ( !nd->used ||
+             !nd->name ||
+             strncmp( nd->name, "rmnet.", 6 ) ) {
+            continue;
+        }
+
+        ADataNet net = &_amodem_rmnets[j];
+
+        net->nd = nd;
+
+        int ip = special_addr_ip + 100 + (net - _amodem_rmnets);
+        net->addr.in.s_addr = htonl(ip);
+        net->gw.in.s_addr = htonl(alias_addr_ip);
+        for ( i = 0; i < NUM_DNS_PER_RMNET && i < dns_addr_count; i++ ) {
+            ip = dns_addr[i];
+            net->dns[i].in.s_addr = htonl(ip);
+        }
+
+        /* Data connections are down by default. */
+        do_set_link( NULL, nd->name, "down" );
+
+        j++;
+    }
+
+    _amodem_num_rmnets = j;
+}
+
 static AModemRec   _android_modem[MAX_GSM_DEVICES];
 
 AModem
@@ -706,6 +796,8 @@ amodem_create( int  base_port, int instance_id, AModemUnsolFunc  unsol_func, voi
     char nvfname[MAX_PATH];
     char *start = nvfname;
     char *end = start + sizeof(nvfname);
+
+    amodem_init_rmnets();
 
     modem->base_port    = base_port;
     modem->instance_id  = instance_id;
@@ -858,7 +950,7 @@ amodem_set_data_registration( AModem  modem, ARegistrationState  state )
             else
                 amodem_unsol( modem, "+CGREG: %d,%d,\"%04x\",\"%07x\"\r",
                             modem->data_mode, modem->data_state,
-                            modem->area_code & 0xffff, modem->cell_id & 0xffffff );
+                            modem->area_code & 0xffff, modem->cell_id & 0xfffffff );
             break;
 
         default:
@@ -1162,10 +1254,46 @@ amodem_find_call_by_number( AModem  modem, const char*  number )
 }
 
 void
+amodem_get_signal_strength( AModem modem, int* rssi, int* ber )
+{
+    *rssi = modem->rssi;
+    *ber = modem->ber;
+}
+
+void
 amodem_set_signal_strength( AModem modem, int rssi, int ber )
 {
     modem->rssi = rssi;
     modem->ber = ber;
+
+    /* Reset LTE signal strength */
+    modem->rxlev = 99;
+    modem->rsrp  = 65535;
+    modem->rssnr = 65535;
+
+    amodem_unsol_buffered( modem, handleSignalStrength(NULL, modem) );
+}
+
+void
+amodem_get_lte_signal_strength( AModem modem, int* rxlev, int* rsrp, int* rssnr )
+{
+    *rxlev = modem->rxlev;
+    *rsrp = modem->rsrp;
+    *rssnr = modem->rssnr;
+}
+
+void
+amodem_set_lte_signal_strength( AModem modem, int rxlev, int rsrp, int rssnr )
+{
+    /* Reset GSM/UMTS signal strength */
+    modem->rssi = 99;
+    modem->ber = 99;
+
+    modem->rxlev = rxlev;
+    modem->rsrp = rsrp;
+    modem->rssnr = rssnr;
+
+    amodem_unsol_buffered( modem, handleSignalStrength(NULL, modem) );
 }
 
 static void
@@ -1276,6 +1404,70 @@ amodem_set_gsm_location( AModem modem, int lac, int ci )
 /** Data
  **/
 
+static ADataNet
+amodem_acquire_data_conn( ADataContext context )
+{
+    int i;
+
+    for ( i = 0; i < _amodem_num_rmnets; ++i ) {
+        ADataNet net = &_amodem_rmnets[i];
+        if ( net->context ) {
+            continue;
+        }
+
+        context->net = net;
+        net->context = context;
+        return net;
+    }
+
+    return NULL;
+}
+
+static void
+amodem_release_data_conn( ADataNet net )
+{
+    net->context->net = NULL;
+    net->context = NULL;
+}
+
+static const char*
+amodem_setup_pdp( ADataContext context )
+{
+    if ( context->active ) {
+        return "OK";
+    }
+
+    ADataNet net = amodem_acquire_data_conn( context );
+    if ( !net || !do_set_link( NULL, net->nd->name, "up" ) ) {
+        goto err;
+    }
+
+    context->active = true;
+    return "OK";
+
+err:
+    if ( net ) {
+        amodem_release_data_conn(net);
+    }
+
+    // service option temporarily out of order
+    return "+CME ERROR: 134";
+}
+
+static const char*
+amodem_teardown_pdp( ADataContext context )
+{
+    if ( !context->active ) {
+        return "OK";
+    }
+
+    do_set_link( NULL, context->net->nd->name, "down" );
+    amodem_release_data_conn( context->net );
+
+    context->active = false;
+    return "OK";
+}
+
 static const char*
 amodem_activate_data_call( AModem  modem, int cid, int enable)
 {
@@ -1302,9 +1494,8 @@ amodem_activate_data_call( AModem  modem, int cid, int enable)
         return "+CME ERROR: 134";
     }
 
-    data->active = enable;
-
-    return "OK";
+    return enable ? amodem_setup_pdp( data )
+                  : amodem_teardown_pdp( data );
 }
 
 /** COMMAND HANDLERS
@@ -2357,7 +2548,9 @@ handleListPDPContexts( const char*  cmd, AModem  modem )
     amodem_begin_line( modem );
     for (nn = 0; nn < MAX_DATA_CONTEXTS; nn++) {
         ADataContext  data = modem->data_contexts + nn;
-        if (!data->active)
+        /* The read command returns the current activation states for all the
+         * defined PDP contexts. */
+        if (data->id <= 0)
             continue;
         amodem_add_line( modem, "+CGACT: %d,%d\r\n", data->id, data->active );
     }
@@ -2374,45 +2567,97 @@ handleDefinePDPContext( const char*  cmd, AModem  modem )
          * We only really support IP ones in the emulator, so don't try to
          * fake PPP ones.
          */
-        return "+CGDCONT: (1-1),\"IP\",,,(0-2),(0-4)\r\n";
-    } else {
-        /* template is +CGDCONT=<id>,"<type>","<apn>",,0,0 */
-        int              id = cmd[0] - '1';
-        ADataType        type;
-        char             apn[32];
-        ADataContext     data;
-
-        if ((unsigned)id > 3)
-            goto BadCommand;
-
-        if ( !memcmp( cmd+1, ",\"IP\",\"", 7 ) ) {
-            type = A_DATA_IP;
-            cmd += 8;
-        } else if ( !memcmp( cmd+1, ",\"PPP\",\"", 8 ) ) {
-            type = A_DATA_PPP;
-            cmd += 9;
-        } else
-            goto BadCommand;
-
-        {
-            const char*  p = strchr( cmd, '"' );
-            int          len;
-            if (p == NULL)
-                goto BadCommand;
-            len = (int)( p - cmd );
-            if (len > sizeof(apn)-1 )
-                len = sizeof(apn)-1;
-            memcpy( apn, cmd, len );
-            apn[len] = 0;
-        }
-
-        data = modem->data_contexts + id;
-
-        data->id     = id + 1;
-        data->active = 0;
-        data->type   = type;
-        memcpy( data->apn, apn, sizeof(data->apn) );
+        amodem_begin_line( modem );
+        amodem_add_line( modem, "+CGDCONT: (1-%d),\"IP\",,,(0-2),(0-4)",
+                         MAX_DATA_CONTEXTS );
+        return amodem_end_line( modem );
     }
+
+    /* Template is +CGDCONT=[<cid>[,<PDP_type>[,<APN>[,<PDP_addr>[...]]]]] */
+    int           cid;
+    ADataContext  data;
+    ADataType     type;
+    char          apn[A_DATA_APN_SIZE];
+    char          addr[INET_ADDRSTRLEN];
+    const char*   p;
+    int           len;
+
+    /* <cid> */
+
+    /* 3GPP TS 27.007 subclause 10.1.1 says that <cid> is optional but doesn't
+     * mention how to handle that correctly.
+     */
+    if ( 1 != sscanf( cmd, "%d", &cid ) )
+        goto BadCommand;
+
+    if ( cid <= 0 || cid > MAX_DATA_CONTEXTS )
+        goto BadCommand;
+
+    data = modem->data_contexts + cid - 1;
+    if (data->active) {
+        /* Data connection in use. Operation not allowed. */
+        return "+CME ERROR: 3";
+    }
+
+    cmd += 1;
+    if ( !*cmd ) {
+        /* No additional parameters. Undefine the specified PDP context. */
+        data->id = -1;
+        return "OK";
+    }
+
+    /* <PDP_type> */
+
+    if ( !memcmp( cmd, ",\"IP\"", 5 ) ) {
+        type = A_DATA_IP;
+        cmd += 5;
+    } else
+        goto BadCommand;
+
+    /* <APN> */
+
+    if ( ',' != cmd[0] || '"' != cmd[1] )
+        goto BadCommand;
+
+    cmd += 2;
+    p = strchr(cmd, '"');
+    if ( p == NULL )
+        goto BadCommand;
+
+    len = p - cmd;
+    if ( !len || len >= sizeof(apn) )
+        goto BadCommand;
+
+    memcpy( apn, cmd, len );
+    apn[len] = '\0';
+
+    /* <PDP_addr> */
+
+    cmd = p + 1;
+    addr[0] = '\0';
+    if ( ',' == cmd[0] && '"' == cmd[1] ) {
+        cmd += 2;
+        p = strchr(cmd, '"');
+        if ( p == NULL )
+            goto BadCommand;
+
+        len = p - cmd;
+        if ( !len || len >= sizeof(addr) )
+            goto BadCommand;
+
+        memcpy( addr, cmd, len );
+        addr[len] = '\0';
+        cmd = p + 1;
+    }
+
+    data->id     = cid;
+    data->active = 0;
+    data->type   = type;
+    strcpy( data->apn, apn );
+    if (inet_pton( AF_INET, addr, &data->addr.in.s_addr) <= 0) {
+        data->addr.in.s_addr = 0;
+    }
+
     return "OK";
 BadCommand:
     return "ERROR: BAD COMMAND";
@@ -2425,18 +2670,119 @@ handleQueryPDPContext( const char* cmd, AModem modem )
     amodem_begin_line(modem);
     for (nn = 0; nn < MAX_DATA_CONTEXTS; nn++) {
         ADataContext  data = modem->data_contexts + nn;
-        if (!data->active)
+        char          addr[INET_ADDRSTRLEN];
+
+        if (data->id <= 0)
             continue;
+
+        /* The read command returns current settings for each defined context. */
+        if (data->addr.in.s_addr) {
+            inet_ntop( AF_INET, &data->addr.in, addr, sizeof addr);
+        } else {
+            addr[0] = '\0';
+        }
         amodem_add_line( modem, "+CGDCONT: %d,\"%s\",\"%s\",\"%s\",0,0\r\n",
                          data->id,
                          data->type == A_DATA_IP ? "IP" : "PPP",
                          data->apn,
-                         /* Note: For now, hard-code the IP address of our
-                          *       network interface
-                          */
-                         data->type == A_DATA_IP ? "10.0.2.15" : "");
+                         addr );
     }
     return amodem_end_line(modem);
+}
+
+static const char*
+handleQueryPDPDynamicProp( const char* cmd, AModem modem )
+{
+    int i, entries;
+
+    assert( !memcmp( cmd, "+CGCONTRDP=?", 12 ) );
+
+    entries = 0;
+    amodem_begin_line( modem );
+    amodem_add_line( modem, "+CGCONTRDP: (" );
+
+    for ( i = 0; i < MAX_DATA_CONTEXTS; i++ ) {
+        ADataContext context = modem->data_contexts + i;
+
+        /* Returns the relevant information for an/all active non secondary PDP
+         * contexts. */
+        if ( !context->active )
+            continue;
+
+        ++entries;
+        amodem_add_line( modem, ( entries == 1 ? "%d" : ",%d" ), context->id );
+    }
+
+    amodem_add_line(modem, ")");
+
+    return amodem_end_line( modem );
+}
+
+static const char*
+handleListPDPDynamicProp( const char* cmd, AModem modem )
+{
+    int cid = -1;
+    int i, j, entries;
+
+    assert( !memcmp( cmd, "+CGCONTRDP", 10 ) );
+
+    cmd += 10;
+    if ( '\0' == *cmd ) {
+        // List all.
+    } else if ( sscanf( cmd, "=%d", &cid ) != 1 ||
+                cid <= 0 ) {
+        return "+CME ERROR: 50"; // Incorrect parameters.
+    }
+
+    entries = 0;
+    amodem_begin_line( modem );
+
+    for ( i = 0; i < MAX_DATA_CONTEXTS; i++ ) {
+        ADataContext context = modem->data_contexts + i;
+
+        /* Returns the relevant information for an/all active non secondary PDP
+         * contexts. */
+        if ( !context->active )
+            continue;
+
+        if ( cid > 0 && context->id != cid )
+            continue;
+
+        ++entries;
+
+        ADataNet net = context->net;
+        char     addr[INET_ADDRSTRLEN];
+
+        /* This is a dirty hack for passing kernel netif num to rild. */
+        const char* bearer_id = net->nd->name + strlen("rmnet.");
+        amodem_add_line( modem, "+CGCONTRDP: %d,%s,\"%s\"",
+                         context->id, bearer_id, context->apn );
+
+        inet_ntop( AF_INET, &net->addr.in, addr, sizeof addr);
+        amodem_add_line( modem, ",\"%s/24\"", addr );
+        inet_ntop( AF_INET, &net->gw.in, addr, sizeof addr);
+        amodem_add_line( modem, ",\"%s\"", addr );
+        for ( j = 0; j < NUM_DNS_PER_RMNET; j++ ) {
+            if (!net->dns[j].in.s_addr) {
+                break;
+            }
+            inet_ntop( AF_INET, &net->dns[j].in, addr, sizeof addr);
+            amodem_add_line( modem, ",\"%s\"", addr );
+        }
+
+        amodem_add_line( modem, "\r\n" );
+    }
+
+    if ( cid > 0 && !entries ) {
+        return "+CME ERROR: 50"; // Incorrect parameters.
+    }
+
+    if ( entries ) {
+        // Remove the trailing "\r\n"
+        modem->out_size -= 2;
+    }
+
+    return amodem_end_line( modem );
 }
 
 static const char*
@@ -2658,9 +3004,18 @@ handleSignalStrength( const char*  cmd, AModem  modem )
     // TODO: return 99 if modem->radio_state==A_RADIO_STATE_OFF, once radio_state is in snapshot.
     int rssi = modem->rssi;
     int ber = modem->ber;
-    rssi = (0 > rssi && rssi > 31) ? 99 : rssi ;
-    ber = (0 > ber && ber > 7 ) ? 99 : ber;
-    amodem_add_line( modem, "+CSQ: %i,%i,85,130,90,6,4,25,9,50,68,12\r\n", rssi, ber );
+    rssi = (0 > rssi || rssi > 31) ? 99 : rssi ;
+    ber = (0 > ber || ber > 7 ) ? 99 : ber;
+
+    // Handling of LTE signal strength.
+    int rxlev = modem->rxlev;
+    int rsrp = modem->rsrp;
+    int rssnr = modem->rssnr;
+    rxlev = (0 > rxlev || rxlev > 63) ? 99 : rxlev;
+    rsrp = (44 > rsrp || rsrp > 140) ? 0x7FFFFFFF : rsrp;
+    rssnr = (-200 > rssnr || rssnr > 300) ? 0x7FFFFFFF : rssnr;
+
+    amodem_add_line( modem, "+CSQ: %i,%i,85,130,90,6,4,%i,%i,2147483647,%i,2147483647\r\n", rssi, ber, rxlev, rsrp, rssnr );
     return amodem_end_line( modem );
 }
 
@@ -2978,7 +3333,8 @@ static const struct {
 
     { "!+CGDCONT=", NULL, handleDefinePDPContext },
     { "+CGDCONT?", NULL, handleQueryPDPContext },
-
+    { "+CGCONTRDP=?", NULL, handleQueryPDPDynamicProp },
+    { "!+CGCONTRDP", NULL, handleListPDPDynamicProp },
     { "+CGQREQ=1", NULL, NULL },
     { "+CGQMIN=1", NULL, NULL },
     { "+CGEREP=1,0", NULL, NULL },
