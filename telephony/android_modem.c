@@ -653,8 +653,8 @@ amodem_reset( AModem  modem )
         modem->emergency_numbers[i] = amodem_nvram_get_str(modem,key_name, NULL);
     }
 
-    modem->area_code = -1;
-    modem->cell_id   = -1;
+    modem->area_code = 0;
+    modem->cell_id   = 0;
 
     strcpy( modem->operators[0].name[0], OPERATOR_HOME_NAME );
     strcpy( modem->operators[0].name[1], OPERATOR_HOME_NAME );
@@ -902,7 +902,7 @@ amodem_set_voice_registration( AModem  modem, ARegistrationState  state )
             break;
 
         case A_REGISTRATION_UNSOL_ENABLED_FULL:
-            amodem_unsol( modem, "+CREG: %d,%d, \"%04x\", \"%07x\"\r",
+            amodem_unsol( modem, "+CREG: %d,%d,\"%04x\",\"%07x\"\r",
                           modem->voice_mode, modem->voice_state,
                           modem->area_code & 0xffff, modem->cell_id & 0xfffffff);
             break;
@@ -1210,11 +1210,12 @@ amodem_send_calls_update( AModem  modem )
 
 
 int
-amodem_add_inbound_call( AModem  modem, const char*  number )
+amodem_add_inbound_call( AModem  modem, const char*  number, const int  numPresentation, const char*  name, const int  namePresentation )
 {
     AVoiceCall  vcall = amodem_alloc_call( modem );
     ACall       call  = &vcall->call;
     int         len;
+    char        cnapName[ A_CALL_NAME_MAX_SIZE+1 ];
 
     if (call == NULL)
         return -1;
@@ -1233,7 +1234,23 @@ amodem_add_inbound_call( AModem  modem, const char*  number )
     memcpy( call->number, number, len );
     call->number[len] = 0;
 
+    call->numberPresentation = numPresentation;
+
+    len = 0;
+    if (namePresentation == 0) {
+      len = strlen(name);
+      if (len >= sizeof(cnapName))
+          len = sizeof(cnapName)-1;
+      memcpy( cnapName, name, len );
+    }
+    cnapName[len] = 0;
+
     amodem_unsol( modem, "RING\r");
+    // Send unsolicited +CNAP with valid information.
+    if (strlen(cnapName) > 0
+        || (namePresentation > 0 && namePresentation <= 2)) {
+        amodem_unsol( modem, "+CNAP: \"%s\",%d\r", cnapName, namePresentation);
+    }
     return 0;
 }
 
@@ -2444,10 +2461,14 @@ handleListCurrentCalls( const char*  cmd, AModem  modem )
     for (nn = 0; nn < modem->call_count; nn++) {
         AVoiceCall  vcall = modem->calls + nn;
         ACall       call  = &vcall->call;
-        if (call->mode == A_CALL_VOICE)
-            amodem_add_line( modem, "+CLCC: %d,%d,%d,%d,%d,\"%s\",%d\r\n",
+        if (call->mode == A_CALL_VOICE) {
+            /* see TS 22.067 Table 1 for the definition of priority */
+            /* +CLCC: <ccid1>,<dir>,<stat>,<mode>,<mpty>,<number>,<type>,<alpha>,<priority>,<CLI validity> */
+            const char* number = (call->numberPresentation == 0) ? call->number : "";
+            amodem_add_line( modem, "+CLCC: %d,%d,%d,%d,%d,\"%s\",%d,\"\",2,%d\r\n",
                              call->id, call->dir, call->state, call->mode,
-                             call->multi, call->number, 129 );
+                             call->multi, number, 129 , call->numberPresentation);
+        }
     }
     return amodem_end_line( modem );
 }
