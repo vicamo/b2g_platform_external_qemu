@@ -3644,6 +3644,227 @@ nfc_recv_snep_put_cb(void* data,  struct nfc_device* nfc)
     return 0;
 }
 
+static const char*
+lex_token(ControlClient client, const char* field, const char* delim, char** args)
+{
+    const char *tok;
+
+    assert(args);
+
+    tok = strsep(args, delim);
+    if (!tok) {
+        control_write(client, "KO: no token %s given\r\n", field);
+        return NULL;
+    }
+    return tok;
+}
+
+static int
+parse_token_l(ControlClient client, const char* field, const char* delim,
+              char** args, long* val)
+{
+    const char* tok;
+
+    assert(val);
+
+    tok = lex_token(client, field, delim, args);
+    if (!tok) {
+        return -1;
+    }
+    errno = 0;
+    *val = strtol(tok, NULL, 0);
+    if (errno) {
+        control_write(client,
+                      "KO: invalid value '%s' for token %s, error %d(%s)\r\n",
+                      tok, field, errno, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+static int
+parse_token_ul(ControlClient client, const char* field, const char* delim,
+               char** args, unsigned long* val)
+{
+    const char* tok;
+
+    assert(val);
+
+    tok = lex_token(client, field, delim, args);
+    if (!tok) {
+        return -1;
+    }
+    errno = 0;
+    *val = strtoul(tok, NULL, 0);
+    if (errno) {
+        control_write(client,
+                      "KO: invalid value '%s' for token %s, error %d(%s)\r\n",
+                      tok, field, errno, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+static int
+parse_token_s(ControlClient client, const char* field, const char* delim,
+              char** args, const char** val, int allow_empty)
+{
+    // TODO: we could add support for escaped characters, if necessary
+
+    assert(val);
+
+    *val = lex_token(client, field, delim, args);
+    if (!*val) {
+        return -1;
+    }
+    if (!allow_empty && !(*val)[0]) {
+        control_write(client, "KO: empty token %s\r\n", field);
+        return -1;
+    }
+    return 0;
+}
+
+static int
+parse_sap(ControlClient client, const char* field,
+          char** args, long* sap, int can_autodetect)
+{
+    assert(args);
+    assert(sap);
+
+    if (parse_token_l(client, field, " ", args, sap) < 0) {
+        return -1;
+    }
+    if (((*sap == -1) && !can_autodetect) ||
+         (*sap < -1) || !(*sap < LLCP_NUMBER_OF_SAPS)) {
+        control_write(client, "KO: invalid %s '%ld'\r\n",
+                      field, *sap);
+        return -1;
+    }
+    return 0;
+}
+
+/* Each record is given by its flag bits, TNF value, type,
+ * payload, and id. Id is optional. Type, payload, and id
+ * are given in base64url encoding.
+ */
+static int
+parse_ndef_rec(ControlClient client, char** args,
+               struct nfc_ndef_record_param* record)
+{
+    const char* p;
+    unsigned long tnf;
+
+    assert(args);
+    assert(record);
+
+    /* read opening bracket */
+    p = strsep(args, "[");
+    if (!p) {
+        control_write(client, "KO: no NDEF record given\r\n");
+        return -1;
+    }
+    /* read flags */
+    if (parse_token_ul(client, "NDEF flags", " ,", args, &record->flags) < 0) {
+        return -1;
+    }
+    if (record->flags & ~NDEF_FLAG_BITS) {
+        control_write(client, "KO: invalid NDEF flags '%u'\r\n",
+                      record->flags);
+        return -1;
+    }
+    /* read TNF */
+    if (parse_token_ul(client, "NDEF TNF", " ,", args, &tnf) < 0) {
+        return -1;
+    }
+    if (!(tnf < NDEF_NUMBER_OF_TNFS)) {
+        control_write(client, "KO: invalid NDEF TNF '%u'\r\n",
+                      record->tnf);
+        return -1;
+    }
+    record->tnf = tnf;
+    /* read type */
+    if (parse_token_s(client, "NDEF type", " ,", args, &record->type, 0) < 0) {
+        return -1;
+    }
+    /* read payload */
+    if (parse_token_s(client, "NDEF payload", " ,", args, &record->payload, 0) < 0) {
+        return -1;
+    }
+    /* read id; might by empty */
+    if (parse_token_s(client, "NDEF id", "]", args, &record->id, 1) < 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static ssize_t
+parse_ndef_msg(ControlClient client, char** args, size_t nrecs,
+               struct nfc_ndef_record_param* rec)
+{
+    size_t i;
+
+    assert(args);
+
+    for (i = 0; i < nrecs && *args && strlen(*args); ++i) {
+        if (parse_ndef_rec(client, args, rec+i) < 0) {
+          return -1;
+        }
+    }
+    if (*args && strlen(*args)) {
+        control_write(client,
+                      "KO: invalid characters near EOL: %s\r\n",
+                      *args);
+        return -1;
+    }
+    return i;
+}
+
+static int
+parse_re_index(ControlClient client, char** args, unsigned long nres,
+               unsigned long* i)
+{
+    assert(i);
+
+    if (parse_token_ul(client, "remote endpoint", " ", args, i) < 0) {
+        return -1;
+    }
+    if (!(*i < nres)) {
+        control_write(client, "KO: unknown remote endpoint %lu\r\n", *i);
+        return -1;
+    }
+    return 0;
+}
+
+static int
+parse_nci_ntf_type(ControlClient client, char** args, unsigned long* ntype)
+{
+    assert(ntype);
+
+    if (parse_token_ul(client, "discover notification type", " ", args, ntype) < 0) {
+        return -1;
+    }
+    if (!(*ntype < NUMBER_OF_NCI_NOTIFICATION_TYPES)) {
+        control_write(client, "KO: unknown discover notification type %lu\r\n", *ntype);
+        return -1;
+    }
+    return 0;
+}
+
+static int
+parse_rf_index(ControlClient client, char** args, long* rf)
+{
+    assert(rf);
+
+    if (parse_token_l(client, "rf index", " ", args, rf) < 0) {
+        return -1;
+    }
+    if (*rf < -1 || *rf >= NUMBER_OF_SUPPORTED_NCI_RF_INTERFACES) {
+        control_write(client, "KO: unknown rf index %lu\r\n", *rf);
+        return -1;
+    }
+    return 0;
+}
+
 static int
 do_nfc_snep( ControlClient  client, char*  args )
 {
@@ -3660,136 +3881,28 @@ do_nfc_snep( ControlClient  client, char*  args )
         return -1;
     }
     if (!strcmp(p, "put")) {
-        size_t i;
+        ssize_t nrecords;
         struct nfc_snep_param param = NFC_SNEP_PARAM_INIT(client);
 
         /* read DSAP */
-        p = strsep(&args, " ");
-        if (!p) {
-            control_write(client, "KO: no DSAP given\r\n");
-            return -1;
-        }
-        errno = 0;
-        param.dsap = strtol(p, NULL, 0);
-        if (errno) {
-            control_write(client,
-                          "KO: invalid DSAP '%s', error %d(%s)\r\n",
-                          p, errno, strerror(errno));
-            return -1;
-        }
-        if ((param.dsap < -1) || !(param.dsap < LLCP_NUMBER_OF_SAPS)) {
-            control_write(client, "KO: invalid DSAP '%ld'\r\n",
-                          param.dsap);
+        if (parse_sap(client, "DSAP", &args, &param.dsap, 1) < 0) {
             return -1;
         }
         /* read SSAP */
-        p = strsep(&args, " ");
-        if (!p) {
-            control_write(client, "KO: no SSAP given\r\n");
+        if (parse_sap(client, "SSAP", &args, &param.ssap, 1) < 0) {
             return -1;
         }
-        errno = 0;
-        param.ssap = strtol(p, NULL, 0);
-        if (errno) {
-            control_write(client,
-                          "KO: invalid SSAP '%s', error %d(%s)\r\n",
-                          p, errno, strerror(errno));
-            return -1;
-        }
-        if ((param.ssap < -1) || !(param.ssap < LLCP_NUMBER_OF_SAPS)) {
-            control_write(client, "KO: invalid SSAP '%ld'\r\n",
-                          param.ssap);
-            return -1;
-        }
-
-        /* The emulator supports up to 4 NDEF records per message. Each
-         * record is given by its flag bits, TNF value, type, payload,
-         * and id. Id is optional. Type, payload, and id are given in
-         * base64url encoding.
-         *
-         * If no NDEF records are given, the emulator will print the current
-         * content of the LLCP data-link buffer.
+        /* The emulator supports up to 4 records per NDEF
+         * message. If no records are given, the emulator
+         * will print the current content of the LLCP data-
+         * link buffer.
          */
-        for (i = 0; i < ARRAY_SIZE(param.record) && args && strlen(args); ++i) {
-            struct nfc_ndef_record_param* record = param.record + i;
-            /* read opening bracket */
-            p = strsep(&args, "[");
-            if (!p) {
-                control_write(client, "KO: no NDEF record given\r\n");
-                return -1;
-            }
-            /* read flags */
-            p = strsep(&args, " ,");
-            if (!p) {
-                control_write(client, "KO: no NDEF flags given\r\n");
-                return -1;
-            }
-            errno = 0;
-            record->flags = strtoul(p, NULL, 0);
-            if (errno) {
-                control_write(client,
-                              "KO: invalid NDEF flags '%s', error %d(%s)\r\n",
-                              p, errno, strerror(errno));
-                return -1;
-            }
-            if (record->flags & ~NDEF_FLAG_BITS) {
-                control_write(client, "KO: invalid NDEF flags '%u'\r\n",
-                              record->flags);
-                return -1;
-            }
-            /* read TNF */
-            p = strsep(&args, " ,");
-            if (!p) {
-                control_write(client, "KO: no NDEF TNF given\r\n");
-                return -1;
-            }
-            errno = 0;
-            record->tnf = strtoul(p, NULL, 0);
-            if (errno) {
-                control_write(client,
-                              "KO: invalid NDEF TNF '%s', error %d(%s)\r\n",
-                              p, errno, strerror(errno));
-                return -1;
-            }
-            if (!(record->tnf < NDEF_NUMBER_OF_TNFS)) {
-                control_write(client, "KO: invalid NDEF TNF '%u'\r\n",
-                              record->tnf);
-                return -1;
-            }
-            /* read type */
-            record->type = strsep(&args, " ,");
-            if (!record->type) {
-                control_write(client, "KO: no NDEF type given\r\n");
-                return -1;
-            }
-            if (!strlen(record->type)) {
-                control_write(client, "KO: empty NDEF type\r\n");
-                return -1;
-            }
-            /* read payload */
-            record->payload = strsep(&args, " ,");
-            if (!record->payload) {
-                control_write(client, "KO: no NDEF payload given\r\n");
-                return -1;
-            }
-            if (!strlen(record->payload)) {
-                control_write(client, "KO: empty NDEF payload\r\n");
-                return -1;
-            }
-            /* read id; might by empty */
-            record->id = strsep(&args, "]");
-            if (!record->id) {
-                control_write(client, "KO: no NDEF ID given\r\n");
-                return -1;
-            }
-            ++param.nrecords;
-        }
-        if (args && strlen(args)) {
-            control_write(client,
-                          "KO: invalid characters near EOL: %s\r\n",
-                          args);
+        nrecords = parse_ndef_msg(client, &args, ARRAY_SIZE(param.record),
+                                  param.record);
+        if (nrecords < 0) {
             return -1;
         }
+        param.nrecords = nrecords;
         if (param.nrecords) {
             /* put SNEP request onto SNEP server */
             if (goldfish_nfc_send_dta(nfc_send_snep_put_cb, &param) < 0) {
@@ -3914,46 +4027,19 @@ do_nfc_nci( ControlClient  client, char*  args )
         return -1;
     }
     if (!strcmp(p, "rf_discover_ntf")) {
-        size_t i;
+        unsigned long i;
         struct nfc_ntf_param param = NFC_NTF_PARAM_INIT(client);
         /* read remote-endpoint index */
-        p = strsep(&args, " ");
-        if (!p) {
-            control_write(client, "KO: no remote endpoint given\r\n");
-            return -1;
-        }
-        errno = 0;
-        i = strtoul(p, NULL, 0);
-        if (errno) {
-            control_write(client,
-                          "KO: invalid remote endpoint '%s', error %d(%s)\r\n",
-                          p, errno, strerror(errno));
-            return -1;
-        }
-        if (!(i < sizeof(nfc_res)/sizeof(nfc_res[0])) ) {
-            control_write(client, "KO: unknown remote endpoint %zu\r\n", i);
-            return -1;
-        }
-
-        /* read discover notification type */
-        p = strsep(&args, " ");
-        if (!p) {
-            control_write(client, "KO: no discover notification type given\r\n");
-            return -1;
-        }
-        errno = 0;
-        param.ntype = strtoul(p, NULL, 0);
-        if (errno) {
-            control_write(client,
-                          "KO: invalid discover notification type '%s', error %d(%s)\r\n",
-                          p, errno, strerror(errno));
-            return -1;
-        }
-        if (!(param.ntype < NUMBER_OF_NCI_NOTIFICATION_TYPES)) {
-            control_write(client, "KO: unknown discover notification type %zu\r\n", param.ntype);
+        if (parse_re_index(client, &args, ARRAY_SIZE(nfc_res), &i) < 0) {
             return -1;
         }
         param.re = nfc_res + i;
+
+        /* read discover notification type */
+        if (parse_nci_ntf_type(client, &args, &param.ntype) < 0) {
+            return -1;
+        }
+
         /* generate RF_DISCOVER_NTF */
         if (goldfish_nfc_send_ntf(nfc_rf_discovery_ntf_cb, &param) < 0) {
             /* error message generated in create function */
@@ -3961,42 +4047,21 @@ do_nfc_nci( ControlClient  client, char*  args )
         }
     } else if (!strcmp(p, "rf_intf_activated_ntf")) {
         struct nfc_ntf_param param = NFC_NTF_PARAM_INIT(client);
-        /* read remote-endpoint index */
-        p = strsep(&args, " ");
-        if (p) {
-            size_t i;
-            errno = 0;
-            i = strtoul(p, NULL, 0);
-            if (errno) {
-                control_write(client,
-                              "KO: invalid remote endpoint '%s', error %d(%s)\r\n",
-                              p, errno, strerror(errno));
-                return -1;
-            }
-            if (!(i < sizeof(nfc_res)/sizeof(nfc_res[0]))) {
-                control_write(client, "KO: unknown remote endpoint %zu\r\n", i);
+        if (args && *args) {
+            unsigned long i;
+            /* read remote-endpoint index */
+            if (parse_re_index(client, &args, ARRAY_SIZE(nfc_res), &i) < 0) {
                 return -1;
             }
             param.re = nfc_res + i;
 
-            /* read rf interface index */
-            p = strsep(&args, " ");
-            if (!p) {
-                param.rf = -1;
+            if (args && *args) {
+                /* read rf interface index */
+                if (parse_rf_index(client, &args, &param.rf) < 0) {
+                    return -1;
+                }
             } else {
-                errno = 0;
-                param.rf = strtol(p, NULL, 0);
-                if (errno) {
-                    control_write(client,
-                                  "KO: invalid rf index '%s', error %d(%s)\r\n",
-                                  p, errno, strerror(errno));
-                    return -1;
-                }
-                if (param.rf < -1 ||
-                    param.rf >= NUMBER_OF_SUPPORTED_NCI_RF_INTERFACES) {
-                    control_write(client, "KO: unknown rf index %d\r\n", param.rf);
-                    return -1;
-                }
+                param.rf = -1;
             }
         } else {
             param.re = NULL;
@@ -4018,8 +4083,8 @@ do_nfc_nci( ControlClient  client, char*  args )
 
 struct nfc_llcp_param {
     ControlClient client;
-    enum llcp_sap dsap;
-    enum llcp_sap ssap;
+    long dsap;
+    long ssap;
 };
 
 #define NFC_LLCP_PARAM_INIT(_client) \
@@ -4040,17 +4105,17 @@ nfc_llcp_connect_cb(void* data, struct nfc_device* nfc, size_t maxlen,
         control_write(param->client, "KO: no active remote endpoint\n");
         return -1;
     }
-    if (!param->dsap && !param->ssap) {
+    if ((param->dsap < 0) && (param->ssap < 0)) {
         param->dsap = nfc->active_re->last_dsap;
         param->ssap = nfc->active_re->last_ssap;
-        if (!param->dsap) {
-            control_write(param->client, "KO: DSAP is 0\r\n");
-            return -1;
-        }
-        if (!param->ssap) {
-            control_write(param->client, "KO: SSAP is 0\r\n");
-            return -1;
-        }
+    }
+    if (!param->dsap) {
+        control_write(param->client, "KO: DSAP is 0\r\n");
+        return -1;
+    }
+    if (!param->ssap) {
+        control_write(param->client, "KO: SSAP is 0\r\n");
+        return -1;
     }
     res = nfc_re_send_llcp_connect(nfc->active_re, param->dsap, param->ssap);
     if (res < 0) {
@@ -4079,41 +4144,11 @@ do_nfc_llcp( ControlClient  client, char*  args )
         struct nfc_llcp_param param = NFC_LLCP_PARAM_INIT(client);
 
         /* read DSAP */
-        p = strsep(&args, " ");
-        if (!p) {
-            control_write(client, "KO: no DSAP given\r\n");
-            return -1;
-        }
-        errno = 0;
-        param.dsap = strtoul(p, NULL, 0);
-        if (errno) {
-            control_write(client,
-                          "KO: invalid DSAP '%s', error %d(%s)\r\n",
-                          p, errno, strerror(errno));
-            return -1;
-        }
-        if (!(param.dsap < LLCP_NUMBER_OF_SAPS)) {
-            control_write(client, "KO: invalid DSAP '%u'\r\n",
-                          param.dsap);
+        if (parse_sap(client, "DSAP", &args, &param.dsap, 1) < 0) {
             return -1;
         }
         /* read SSAP */
-        p = strsep(&args, " ");
-        if (!p) {
-            control_write(client, "KO: no SSAP given\r\n");
-            return -1;
-        }
-        errno = 0;
-        param.ssap = strtoul(p, NULL, 0);
-        if (errno) {
-            control_write(client,
-                          "KO: invalid SSAP '%s', error %d(%s)\r\n",
-                          p, errno, strerror(errno));
-            return -1;
-        }
-        if (!(param.ssap < LLCP_NUMBER_OF_SAPS)) {
-            control_write(client, "KO: invalid SSAP '%u'\r\n",
-                          param.ssap);
+        if (parse_sap(client, "SSAP", &args, &param.ssap, 1) < 0) {
             return -1;
         }
         if (goldfish_nfc_send_dta(nfc_llcp_connect_cb, &param) < 0) {
