@@ -325,6 +325,9 @@ typedef struct _ADataNetRec {
 
 /* the spec says that there can only be a max of 4 contexts */
 #define  MAX_DATA_CONTEXTS  4
+
+static const char* amodem_teardown_pdp( ADataContext context );
+
 /* According to 3GPP 22.083 clause 2.2.1, 3GPP 22.084 clause 1.2.1 and 3GPP
  * 22.030 clause 6.5.5.6, the case of the maximum number is reached "when
  * there comes an incoming call while we have already one active(held)
@@ -749,7 +752,7 @@ static void
 amodem_init_rmnets()
 {
     static int inited = 0;
-    int i, j;
+    int i, j, k;
 
     if ( inited ) {
         return;
@@ -773,9 +776,9 @@ amodem_init_rmnets()
         int ip = special_addr_ip + 100 + (net - _amodem_rmnets);
         net->addr.in.s_addr = htonl(ip);
         net->gw.in.s_addr = htonl(alias_addr_ip);
-        for ( i = 0; i < NUM_DNS_PER_RMNET && i < dns_addr_count; i++ ) {
-            ip = dns_addr[i];
-            net->dns[i].in.s_addr = htonl(ip);
+        for ( k = 0; k < NUM_DNS_PER_RMNET && k < dns_addr_count; k++ ) {
+            ip = dns_addr[k];
+            net->dns[k].in.s_addr = htonl(ip);
         }
 
         /* Data connections are down by default. */
@@ -929,7 +932,7 @@ amodem_set_data_registration( AModem  modem, ARegistrationState  state )
         int nn;
         for (nn = 0; nn < MAX_DATA_CONTEXTS; nn++) {
             ADataContext  data = modem->data_contexts + nn;
-            data->active = 0;
+            amodem_teardown_pdp( data );
         }
         // Trigger an unsol data call list.
         amodem_unsol(modem, "+CGEV: ME DETACH\r");
@@ -3356,11 +3359,11 @@ static const struct {
     { "+CGDCONT?", NULL, handleQueryPDPContext },
     { "+CGCONTRDP=?", NULL, handleQueryPDPDynamicProp },
     { "!+CGCONTRDP", NULL, handleListPDPDynamicProp },
-    { "+CGQREQ=1", NULL, NULL },
-    { "+CGQMIN=1", NULL, NULL },
+    { "!+CGQREQ=", NULL, NULL },
+    { "!+CGQMIN=", NULL, NULL },
     { "+CGEREP=1,0", NULL, NULL },
     { "!+CGACT=", NULL, handleActivatePDPContext },
-    { "D*99***1#", NULL, handleStartPDPContext },
+    { "!D*99***", NULL, handleStartPDPContext },
 
     /* see requestDial() */
     { "!D", NULL, handleDial },  /* the code says that success/error is ignored, the call state will
