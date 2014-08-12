@@ -11,9 +11,8 @@
 */
 
 #include "android/utils/debug.h"
-#include "nfc.h"
-#include "nfc-hci.h"
-#include "nfc-nci.h"
+#include <nfcemu/nfcemu.h>
+#include "qemu-timer.h"
 #include "qemu_file.h"
 #include "goldfish_device.h"
 #include "goldfish_nfc.h"
@@ -65,7 +64,7 @@ struct nfc_state {
     uint8_t data[384];
     uint8_t reserved0[2556]; /* ceil to 4096 */
 
-    struct nfc_device nfc;
+    struct nfc_device* nfc;
     struct nfc_delivery_cb cb;
 };
 
@@ -119,7 +118,6 @@ static void
 goldfish_handle_pending_cb(struct nfc_state* s)
 {
     ssize_t res;
-    size_t maxlen;
 
     assert(s);
 
@@ -128,13 +126,11 @@ goldfish_handle_pending_cb(struct nfc_state* s)
     }
 
     if (s->cb.type == NTFN_BUF) {
-        maxlen = MIN(sizeof(s->ntfn), MAX_NCI_PAYLOAD_LENGTH);
         res = s->cb.func(s->cb.data, (union nci_packet*)s->ntfn);
 
         goldfish_nfc_set_status(s, STATUS_NCI_NTFN, !!res);
 
     } else if (s->cb.type == DATA_BUF) {
-        maxlen = MIN(sizeof(s->data), MAX_NCI_PAYLOAD_LENGTH);
         res = s->cb.func(s->cb.data, (union nci_packet*)s->data);
 
         goldfish_nfc_set_status(s, STATUS_NCI_DATA, !!res);
@@ -173,8 +169,7 @@ goldfish_nfc_process_ctrl(struct nfc_state* s)
 
       memset(s->resp, 0, sizeof(s->resp));
       memset(&s->cb, 0, sizeof(s->cb));
-      res = nfc_process_nci_msg((const union nci_packet*)s->cmnd, &s->nfc,
-                                (union nci_packet*)s->resp, &s->cb);
+      res = nfc_device_process_nci_msg(s->nfc, s->cmnd, s->resp, &s->cb);
 
       s->status &= ~STATUS_NCI_CMND;
 
@@ -187,8 +182,7 @@ goldfish_nfc_process_ctrl(struct nfc_state* s)
       s->status |= STATUS_HCI_CMND;
 
       memset(s->resp, 0, sizeof(s->resp));
-      res = nfc_process_hci_cmd((const union hci_packet*)s->cmnd, &s->nfc,
-                                (union hci_answer*)s->resp);
+      res = nfc_device_process_hci_msg(s->nfc, s->cmnd, s->resp, &s->cb);
 
       s->status &= ~STATUS_HCI_CMND;
 
@@ -301,12 +295,54 @@ static CPUWriteMemoryFunc* goldfish_nfc_writefn[] = {
 
 static struct nfc_state _nfc_states[1];
 
+/* defined in android/console.c */
+extern void console_log_msg(const char* fmtstr, ...);
+extern void console_log_err(const char* fmtstr, ...);
+
+static nfcemu_timeout*
+new_timeout(void (*cb)(void*), void* data)
+{
+  return qemu_new_timer_ms(vm_clock, cb, data);
+}
+
+static void
+mod_timeout(nfcemu_timeout* t, unsigned long ms)
+{
+  qemu_mod_timer(t, qemu_get_clock_ms(vm_clock) + ms);
+}
+
+static void
+del_timeout(nfcemu_timeout* t)
+{
+  qemu_del_timer(t);
+}
+
+static int
+timeout_is_pending(nfcemu_timeout* t)
+{
+  return qemu_timer_pending(t);
+}
+
 void
 goldfish_nfc_init()
 {
     struct nfc_state* s = &_nfc_states[0];
 
-    nfc_device_init(&s->nfc);
+    /* initialize NFC library */
+    nfcemu_init(console_log_msg,
+                console_log_err,
+                new_timeout,
+                mod_timeout,
+                del_timeout,
+                timeout_is_pending,
+                goldfish_nfc_send_ntf,
+                goldfish_nfc_send_dta,
+                goldfish_nfc_recv_dta);
+
+    s->nfc = nfc_device_create();
+    if (!s->nfc) {
+      abort();
+    }
 
     s->dev.name = "goldfish_nfc";
     s->dev.base = 0;  /* allocated dynamically. */
@@ -335,7 +371,7 @@ goldfish_nfc_send_dta(ssize_t (*create)(void*, struct nfc_device*, size_t,
 
     maxlen = MIN(sizeof(s->data), MAX_NCI_PAYLOAD_LENGTH);
     memset(s->data, 0, maxlen);
-    res = create(data, &s->nfc, maxlen, (union nci_packet*)s->data);
+    res = create(data, s->nfc, maxlen, (union nci_packet*)s->data);
     if (res < 0)
       return -1;
 
@@ -358,7 +394,7 @@ goldfish_nfc_send_ntf(ssize_t (*create)(void*, struct nfc_device*, size_t,
 
     maxlen = MIN(sizeof(s->ntfn), MAX_NCI_PAYLOAD_LENGTH);
     memset(s->ntfn, 0, maxlen);
-    res = create(data, &s->nfc, maxlen, (union nci_packet*)s->ntfn);
+    res = create(data, s->nfc, maxlen, (union nci_packet*)s->ntfn);
     if (res < 0)
       return -1;
 
@@ -377,7 +413,7 @@ goldfish_nfc_recv_dta(ssize_t (*recv)(void*, struct nfc_device*), void* data)
 
     s = &_nfc_states[0];
 
-    res = recv(data, &s->nfc);
+    res = recv(data, s->nfc);
     if (res < 0) {
       return -1;
     }
