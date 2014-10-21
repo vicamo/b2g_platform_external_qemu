@@ -41,7 +41,6 @@ EMULATOR_TARGET_CFLAGS += \
     -I$(LOCAL_PATH)/tcg/$(TCG_TARGET) \
     -DTARGET_ARCH=\"$(EMULATOR_TARGET_ARCH)\"
 
-EMULATOR_TARGET_CFLAGS += $(NFC_CFLAGS)
 
 common_LOCAL_CFLAGS =
 common_LOCAL_SRC_FILES =
@@ -82,10 +81,20 @@ HW_SOURCES := \
     goldfish_rfkill.c \
     goldfish_tty.c \
     goldfish_vmem.c \
+    llcp.c \
+    llcp-snep.c \
     msmouse.c \
+    ndef.c \
+    nfc.c \
+    nfc-hci.c \
+    nfc-nci.c \
+    nfc-re.c \
+    nfc-rf.c \
+    nfc-tag.c \
     pci.c \
     qdev.c \
     scsi-disk.c \
+    snep.c \
     sysbus.c \
     usb-hid.c \
     usb-hub.c \
@@ -345,6 +354,7 @@ LOCAL_SRC_FILES := \
     qemu-timer-common.c \
     user-events-qemu.c \
     vl-android.c \
+    android/base64.c \
     android/console.c \
     android/opengles.c \
     android/display-core.c \
@@ -426,6 +436,7 @@ common_LOCAL_SRC_FILES := \
     user-events-qemu.c \
     vl-android.c \
     android/cmdline-option.c \
+    android/base64.c \
     android/console.c \
     android/display.c \
     android/display-core.c \
@@ -466,7 +477,6 @@ LOCAL_STATIC_LIBRARIES += \
     emulator-libelff \
     emulator-common \
     $(SDL_STATIC_LIBRARIES)
-LOCAL_STATIC_LIBRARIES += $(LIBNFCEMU_STATIC_LIBRARIES)
 LOCAL_LDLIBS += $(common_LOCAL_LDLIBS)
 LOCAL_CFLAGS += $(common_LOCAL_CFLAGS)
 LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
@@ -493,7 +503,6 @@ ifneq ($(filter linux darwin,$(HOST_OS)),)
         emulator64-libelff \
         emulator64-common \
         $(SDL_STATIC_LIBRARIES_64)
-    LOCAL_STATIC_LIBRARIES += $(LIBNFCEMU_STATIC_LIBRARIES_64)
     LOCAL_LDLIBS += $(common_LOCAL_LDLIBS) -m64
     LOCAL_CFLAGS += $(common_LOCAL_CFLAGS) -m64
     LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
