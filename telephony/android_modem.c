@@ -3125,6 +3125,8 @@ handleDial( const char*  cmd, AModem  modem )
         call->number[len] = 0;
     }
 
+    call->numberPresentation = 0;
+
     amodem_send_calls_update( modem );
 
     amodem_begin_line( modem );
