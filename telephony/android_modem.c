@@ -3207,6 +3207,20 @@ handleSignalStrength( const char*  cmd, AModem  modem )
     return amodem_end_line( modem );
 }
 
+static int
+hasWaitingCall( AModem  modem )
+{
+  int nn;
+  for (nn = 0; nn < modem->call_count; nn++) {
+    AVoiceCall  vcall = modem->calls + nn;
+    ACall       call  = &vcall->call;
+    if (call->mode == A_CALL_VOICE && call->state == A_CALL_WAITING) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static const char*
 handleHangup( const char*  cmd, AModem  modem )
 {
@@ -3231,6 +3245,7 @@ handleHangup( const char*  cmd, AModem  modem )
 
             case '1':
                 if (cmd[1] == 0) { /* release all active, accept held one */
+                    int waitingCallOnly = hasWaitingCall(modem);
                     for (nn = 0; nn < modem->call_count; nn++) {
                         AVoiceCall  vcall = modem->calls + nn;
                         ACall       call  = &vcall->call;
@@ -3240,7 +3255,7 @@ handleHangup( const char*  cmd, AModem  modem )
                             amodem_free_call(modem, vcall, CALL_FAIL_NORMAL);
                             nn--;
                         }
-                        else if (call->state == A_CALL_HELD     ||
+                        else if ((call->state == A_CALL_HELD && !waitingCallOnly) ||
                                  call->state == A_CALL_WAITING) {
                             acall_set_state( vcall, A_CALL_ACTIVE );
                         }
@@ -3255,6 +3270,7 @@ handleHangup( const char*  cmd, AModem  modem )
 
             case '2':
                 if (cmd[1] == 0) {  /* place all active on hold, accept held or waiting one */
+                    int waitingCallOnly = hasWaitingCall(modem);
                     for (nn = 0; nn < modem->call_count; nn++) {
                         AVoiceCall  vcall = modem->calls + nn;
                         ACall       call  = &vcall->call;
@@ -3263,7 +3279,7 @@ handleHangup( const char*  cmd, AModem  modem )
                         if (call->state == A_CALL_ACTIVE) {
                             acall_set_state( vcall, A_CALL_HELD );
                         }
-                        else if (call->state == A_CALL_HELD     ||
+                        else if ((call->state == A_CALL_HELD && !waitingCallOnly) ||
                                  call->state == A_CALL_WAITING) {
                             acall_set_state( vcall, A_CALL_ACTIVE );
                         }
