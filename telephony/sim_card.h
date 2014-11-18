@@ -13,6 +13,7 @@
 #define _android_sim_card_h
 
 #include "gsm.h"
+#include <stdbool.h>
 
 #define  A_SIM_PIN_RETRIES 3
 #define  A_SIM_PUK_RETRIES 6
@@ -33,6 +34,7 @@ typedef enum {
 
 extern ASimStatus  asimcard_get_status( ASimCard  sim );
 extern void        asimcard_set_status( ASimCard  sim, ASimStatus  status );
+extern void        asimcard_reset_status_after_radio_off( ASimCard  sim );
 
 extern const char*  asimcard_get_pin( ASimCard  sim );
 extern const char*  asimcard_get_puk( ASimCard  sim );
@@ -44,6 +46,9 @@ extern int         asimcard_check_puk( ASimCard  sim, const char*  puk, const ch
 
 extern int         asimcard_get_pin_retries( ASimCard  sim );
 extern int         asimcard_get_puk_retries( ASimCard  sim );
+
+extern bool        asimcard_get_pin_enabled( ASimCard  sim );
+extern int         asimcard_set_pin_enabled( ASimCard  sim, bool  enabled, const char*  pin );
 
 /* Restricted SIM Access command, as defined by 8.18 of 3GPP 27.007 */
 typedef enum {
