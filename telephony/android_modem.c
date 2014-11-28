@@ -1238,6 +1238,8 @@ amodem_add_inbound_call( AModem  modem, const char*  number, const int  numPrese
 
     vcall->is_remote = (remote_number_string_to_port(number, modem, NULL, NULL) > 0);
 
+    vcall->timer = NULL;
+
     len  = strlen(number);
     if (len >= sizeof(call->number))
         len = sizeof(call->number)-1;
