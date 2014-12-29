@@ -1923,6 +1923,7 @@ handleRadioPower( const char*  cmd, AModem  modem )
         case A_RADIO_STATE_OFF:
             amodem_set_voice_registration(modem, A_REGISTRATION_UNREGISTERED);
             amodem_set_data_registration(modem, A_REGISTRATION_UNREGISTERED);
+            asimcard_reset_status_after_radio_off(modem->sim);
             break;
         case A_RADIO_STATE_ON:
             amodem_set_voice_registration(modem, A_REGISTRATION_HOME);
@@ -2434,12 +2435,12 @@ handleChangeOrEnterPIN( const char*  cmd, AModem  modem )
             else
                 return "+CME ERROR: BAD PIN";
 
-        case A_SIM_STATUS_PUK:
-            if (strlen(cmd) == 9 && cmd[4] == ',') {
-                char  puk[5];
-                memcpy( puk, cmd, 4 );
-                puk[4] = 0;
-                if ( asimcard_check_puk( modem->sim, puk, cmd+5 ) )
+        case A_SIM_STATUS_PUK:  /* waiting for PUK */
+            if (strlen(cmd) == 13 && cmd[8] == ',') {
+                char  puk[9];
+                memcpy( puk, cmd, 8 );
+                puk[8] = 0;
+                if ( asimcard_check_puk( modem->sim, puk, cmd+9 ) )
                     return "+CPIN: READY";
                 else
                     return "+CME ERROR: BAD PUK";
@@ -2653,6 +2654,57 @@ handleCallForwardReq( const char* cmd, AModem modem )
     } else {
         return handleCallForwardSetReq(cmd, modem);
     }
+}
+
+static const char*
+handleFacilityLockReq( const char* cmd, AModem modem )
+{
+    char fac[64];
+    char passwd[64];
+    int mode;
+    // According to TS 27.007, the default value is 7.
+    int class = 7;
+
+    // AT+CLCK=<fac>,<mode>[,<password>[,<class>]].
+    int argc = sscanf(cmd, "+CLCK=\"%[^\"]\",%d,\"%[^\"]\",%d", fac, &mode, passwd, &class);
+    if (argc < 2) {
+        // Incorrect parameters
+        return "+CME ERROR: 50";
+    }
+
+    // Now we only support "pin" facility lock.
+    if (strcmp(fac, "SC")) {
+        // Operation not supported
+        return "+CME ERROR: 4";
+    }
+
+    // Now we only support voice service class.
+    if (!(class & 1)) {
+        // Operation not supported
+        return "+CME ERROR: 4";
+    }
+
+    switch (mode) {
+        case 0: // Unlock
+        case 1: // Lock
+            if (argc < 3) {
+                // Incorrect parameters
+                return "+CME ERROR: 50";
+            }
+
+            if (!asimcard_set_pin_enabled(modem->sim, (mode == 1), passwd)) {
+                // Incorrect password
+                return "+CME ERROR: 16";
+            }
+
+            return "OK";
+        case 2: //Query status.
+            return amodem_printf(modem, "+CLCK: %d,%d\r\n",
+                                 asimcard_get_pin_enabled(modem->sim) ? 1 : 0, 1);
+    }
+
+    // Incorrect parameters
+    return "+CME ERROR: 50";
 }
 
 /* Add a(n unsolicited) time response.
@@ -3587,6 +3639,7 @@ static const struct {
     { "!+CPINR=", NULL, handleGetRemainingRetries }, /* get remaining PIN retries*/
     { "+CEER", NULL, handleLastCallFailCause },
     { "!+CCFC", NULL, handleCallForwardReq }, /* call forward request */
+    { "!+CLCK", NULL, handleFacilityLockReq }, /* facility lock request */
 
     /* see getSIMStatus() */
     { "+CPIN?", NULL, handleSIMStatusReq },
