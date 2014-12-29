@@ -1227,16 +1227,30 @@ amodem_add_inbound_call( AModem  modem, const char*  number, const int  numPrese
     ACall       call  = &vcall->call;
     int         len;
     char        cnapName[ A_CALL_NAME_MAX_SIZE+1 ];
+    int         voice_call_count;
+    int         nn;
 
     if (call == NULL)
         return -1;
 
     call->dir   = A_CALL_INBOUND;
-    call->state = A_CALL_INCOMING;
     call->mode  = A_CALL_VOICE;
     call->multi = 0;
 
+    voice_call_count = 0;
+    for (nn = 0; nn < modem->call_count; nn++) {
+      AVoiceCall  vcall = modem->calls + nn;
+      ACall       call  = &vcall->call;
+      if (call->mode == A_CALL_VOICE) {
+        voice_call_count++;
+      }
+    }
+
+    call->state = (voice_call_count == 1) ? A_CALL_INCOMING : A_CALL_WAITING;
+
     vcall->is_remote = (remote_number_string_to_port(number, modem, NULL, NULL) > 0);
+
+    vcall->timer = NULL;
 
     len  = strlen(number);
     if (len >= sizeof(call->number))
@@ -1909,6 +1923,7 @@ handleRadioPower( const char*  cmd, AModem  modem )
         case A_RADIO_STATE_OFF:
             amodem_set_voice_registration(modem, A_REGISTRATION_UNREGISTERED);
             amodem_set_data_registration(modem, A_REGISTRATION_UNREGISTERED);
+            asimcard_reset_status_after_radio_off(modem->sim);
             break;
         case A_RADIO_STATE_ON:
             amodem_set_voice_registration(modem, A_REGISTRATION_HOME);
@@ -2420,12 +2435,12 @@ handleChangeOrEnterPIN( const char*  cmd, AModem  modem )
             else
                 return "+CME ERROR: BAD PIN";
 
-        case A_SIM_STATUS_PUK:
-            if (strlen(cmd) == 9 && cmd[4] == ',') {
-                char  puk[5];
-                memcpy( puk, cmd, 4 );
-                puk[4] = 0;
-                if ( asimcard_check_puk( modem->sim, puk, cmd+5 ) )
+        case A_SIM_STATUS_PUK:  /* waiting for PUK */
+            if (strlen(cmd) == 13 && cmd[8] == ',') {
+                char  puk[9];
+                memcpy( puk, cmd, 8 );
+                puk[8] = 0;
+                if ( asimcard_check_puk( modem->sim, puk, cmd+9 ) )
                     return "+CPIN: READY";
                 else
                     return "+CME ERROR: BAD PUK";
@@ -2639,6 +2654,57 @@ handleCallForwardReq( const char* cmd, AModem modem )
     } else {
         return handleCallForwardSetReq(cmd, modem);
     }
+}
+
+static const char*
+handleFacilityLockReq( const char* cmd, AModem modem )
+{
+    char fac[64];
+    char passwd[64];
+    int mode;
+    // According to TS 27.007, the default value is 7.
+    int class = 7;
+
+    // AT+CLCK=<fac>,<mode>[,<password>[,<class>]].
+    int argc = sscanf(cmd, "+CLCK=\"%[^\"]\",%d,\"%[^\"]\",%d", fac, &mode, passwd, &class);
+    if (argc < 2) {
+        // Incorrect parameters
+        return "+CME ERROR: 50";
+    }
+
+    // Now we only support "pin" facility lock.
+    if (strcmp(fac, "SC")) {
+        // Operation not supported
+        return "+CME ERROR: 4";
+    }
+
+    // Now we only support voice service class.
+    if (!(class & 1)) {
+        // Operation not supported
+        return "+CME ERROR: 4";
+    }
+
+    switch (mode) {
+        case 0: // Unlock
+        case 1: // Lock
+            if (argc < 3) {
+                // Incorrect parameters
+                return "+CME ERROR: 50";
+            }
+
+            if (!asimcard_set_pin_enabled(modem->sim, (mode == 1), passwd)) {
+                // Incorrect password
+                return "+CME ERROR: 16";
+            }
+
+            return "OK";
+        case 2: //Query status.
+            return amodem_printf(modem, "+CLCK: %d,%d\r\n",
+                                 asimcard_get_pin_enabled(modem->sim) ? 1 : 0, 1);
+    }
+
+    // Incorrect parameters
+    return "+CME ERROR: 50";
 }
 
 /* Add a(n unsolicited) time response.
@@ -3125,6 +3191,8 @@ handleDial( const char*  cmd, AModem  modem )
         call->number[len] = 0;
     }
 
+    call->numberPresentation = 0;
+
     amodem_send_calls_update( modem );
 
     amodem_begin_line( modem );
@@ -3205,6 +3273,20 @@ handleSignalStrength( const char*  cmd, AModem  modem )
     return amodem_end_line( modem );
 }
 
+static int
+hasWaitingCall( AModem  modem )
+{
+  int nn;
+  for (nn = 0; nn < modem->call_count; nn++) {
+    AVoiceCall  vcall = modem->calls + nn;
+    ACall       call  = &vcall->call;
+    if (call->mode == A_CALL_VOICE && call->state == A_CALL_WAITING) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static const char*
 handleHangup( const char*  cmd, AModem  modem )
 {
@@ -3229,6 +3311,7 @@ handleHangup( const char*  cmd, AModem  modem )
 
             case '1':
                 if (cmd[1] == 0) { /* release all active, accept held one */
+                    int waitingCallOnly = hasWaitingCall(modem);
                     for (nn = 0; nn < modem->call_count; nn++) {
                         AVoiceCall  vcall = modem->calls + nn;
                         ACall       call  = &vcall->call;
@@ -3238,7 +3321,7 @@ handleHangup( const char*  cmd, AModem  modem )
                             amodem_free_call(modem, vcall, CALL_FAIL_NORMAL);
                             nn--;
                         }
-                        else if (call->state == A_CALL_HELD     ||
+                        else if ((call->state == A_CALL_HELD && !waitingCallOnly) ||
                                  call->state == A_CALL_WAITING) {
                             acall_set_state( vcall, A_CALL_ACTIVE );
                         }
@@ -3253,6 +3336,7 @@ handleHangup( const char*  cmd, AModem  modem )
 
             case '2':
                 if (cmd[1] == 0) {  /* place all active on hold, accept held or waiting one */
+                    int waitingCallOnly = hasWaitingCall(modem);
                     for (nn = 0; nn < modem->call_count; nn++) {
                         AVoiceCall  vcall = modem->calls + nn;
                         ACall       call  = &vcall->call;
@@ -3261,7 +3345,7 @@ handleHangup( const char*  cmd, AModem  modem )
                         if (call->state == A_CALL_ACTIVE) {
                             acall_set_state( vcall, A_CALL_HELD );
                         }
-                        else if (call->state == A_CALL_HELD     ||
+                        else if ((call->state == A_CALL_HELD && !waitingCallOnly) ||
                                  call->state == A_CALL_WAITING) {
                             acall_set_state( vcall, A_CALL_ACTIVE );
                         }
@@ -3555,6 +3639,7 @@ static const struct {
     { "!+CPINR=", NULL, handleGetRemainingRetries }, /* get remaining PIN retries*/
     { "+CEER", NULL, handleLastCallFailCause },
     { "!+CCFC", NULL, handleCallForwardReq }, /* call forward request */
+    { "!+CLCK", NULL, handleFacilityLockReq }, /* facility lock request */
 
     /* see getSIMStatus() */
     { "+CPIN?", NULL, handleSIMStatusReq },
