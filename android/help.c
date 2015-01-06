@@ -18,6 +18,21 @@
 #define  PRINTF(...)  stralloc_add_format(out,__VA_ARGS__)
 
 static void
+help_list_avds( stralloc_t* out ) {
+    PRINTF(
+    "  List all available AVDs\n\n"
+
+    "  When this flag is used, the emulator will not start, but instead\n"
+    "  probe the Android 'home' directory and print the names of all AVDs\n"
+    "  that were created by the user, and which can be started with\n"
+    "  '@<name>', or the equivalent '-name <avd>'.\n\n"
+
+    "  Note that the home directory can be overriden by defining the\n"
+    "  ANDROID_SDK_HOME environment variable.\n\n"
+    );
+}
+
+static void
 help_virtual_device( stralloc_t*  out )
 {
     PRINTF(
@@ -272,9 +287,8 @@ help_environment(stralloc_t*  out)
 
     "  If ANDROID_LOG_TAGS is defined, it will be used as in '-logcat <tags>'.\n\n"
 
-    "  If ANDROID_SDK_HOME is defined, it indicates the path of the '.android'\n"
-    "  directory which contains the SDK user data (Android Virtual Devices,\n"
-    "  DDMS preferences, key stores, etc.).\n\n"
+    "  If ANDROID_EMULATOR_HOME is defined, it replaces the path of the '$HOME/.android'\n"
+    "  directory which contains the emulator config data (DDMS preferences, key stores, etc.).\n\n"
 
     "  If ANDROID_SDK_ROOT is defined, it indicates the path of the SDK\n"
     "  installation directory.\n\n"

@@ -630,10 +630,15 @@ init_sdl_ui(AConfig*         skinConfig,
         signal(SIGTTOU, SIG_IGN);
 #endif
     } else {
-#  ifdef CONFIG_DARWIN
+#ifndef _WIN32
+        // NOTE: On Windows, the program icon is embedded as a resource inside
+        //       the executable, and there is no need to actually set it
+        //       explictly, so do not call android_icon_find() on this
+        //       platform.
+#  if defined(__APPLE__)
         static const char kIconFile[] = "android_icon_256.png";
 #  else
-        static const char kIconFile[] = "android_icon_32.png";
+        static const char kIconFile[] = "android_icon_128.png";
 #  endif
         size_t icon_size;
         const unsigned char* icon_data =
@@ -646,6 +651,7 @@ init_sdl_ui(AConfig*         skinConfig,
                     "### Error: could not find emulator icon resource: %s\n",
                     kIconFile);
         }
+#endif  // !_WIN32
     }
     atexit(android_ui_at_exit);
 

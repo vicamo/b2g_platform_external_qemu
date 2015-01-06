@@ -195,7 +195,8 @@ skin_keyboard_process_event(SkinKeyboard*  kb, SkinEvent* ev, int  down)
                 if (len < 0) {
                     break;
                 }
-                skin_keyboard_process_unicode_event(kb, codepoint, down);
+                skin_keyboard_process_unicode_event(kb, codepoint, 1);
+                skin_keyboard_process_unicode_event(kb, codepoint, 0);
                 text += len;
             }
             skin_keyboard_flush(kb);
@@ -236,12 +237,12 @@ skin_keyboard_process_event(SkinKeyboard*  kb, SkinEvent* ev, int  down)
             return;
         }
 
-        if (code == -1) {
-            D("ignoring keycode %d", keycode);
-        } else if (code > 0) {
+        if (code == KEY_BACKSPACE || code == KEY_ENTER) {
             skin_keyboard_do_key_event(kb, code, down);
             skin_keyboard_flush(kb);
+            return;
         }
+        D("ignoring keycode %d", keycode);
     }
 }
 

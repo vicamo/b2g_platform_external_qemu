@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-unsigned long long android_verbose;
+unsigned long long android_verbose = 0;
 
 void
 dprint( const char*  format,  ... )

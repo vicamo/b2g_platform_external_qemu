@@ -215,7 +215,7 @@ static SkinKeyMod sdl_mod_to_key_mod(int sdl_mod) {
     SkinKeyMod mod = 0;
     size_t nn;
     for (nn = 0; nn < kConvertSize; ++nn) {
-        if (sdl_mod && kConvert[nn].sdl_flag) {
+        if (sdl_mod & kConvert[nn].sdl_flag) {
             mod |= kConvert[nn].mod_flag;
         }
     }
@@ -327,12 +327,12 @@ bool skin_event_poll(SkinEvent* event) {
                     last_keys_add(last_keys, sdl_sym, sdl_mod, unicode);
                 }
 
-                if (unicode) {
+                if (unicode && down) {
                     // The unicode value is added to a pending event
                     // unless it is invalid.
                     if (prepare_text_input_event(
-                            &pending_event, 
-                            unicode, 
+                            &pending_event,
+                            unicode,
                             down)) {
                         pending = true;
                     }
