@@ -85,11 +85,14 @@ HW_SOURCES := \
     android/goldfish/tty.c \
     android/goldfish/vmem.c \
     nfc/llcp.c \
+    nfc/llcp-snep.c \
+    nfc/ndef.c \
     nfc/nfc.c \
     nfc/hci.c \
     nfc/nci.c \
     nfc/re.c \
     nfc/rf.c \
+    nfc/snep.c \
     pci/pci.c \
     scsi/scsi-disk.c \
     usb/dev-hid.c \
@@ -345,6 +348,7 @@ LOCAL_SRC_FILES := \
     qemu-timer.c \
     qemu-timer-common.c \
     vl-android.c \
+    android/base64.c \
     android/console.c \
     android/opengles.c \
     android/display-core.c \
@@ -426,6 +430,7 @@ common_LOCAL_SRC_FILES := \
     qemu-timer-common.c \
     vl-android.c \
     android/cmdline-option.c \
+    android/base64.c \
     android/console.c \
     android/display.c \
     android/display-core.c \
