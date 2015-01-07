@@ -3421,8 +3421,8 @@ struct nfc_ndef_record_param {
     unsigned long flags;
     enum ndef_tnf tnf;
     const char* type;
-    const char* payload;
     const char* id;
+    const char* payload;
 };
 
 #define NFC_NDEF_PARAM_RECORD_INIT(_rec) \
@@ -3430,8 +3430,8 @@ struct nfc_ndef_record_param {
         .flags = 0, \
         .tnf = 0, \
         .type = NULL, \
-        .payload = NULL, \
-        .id = NULL \
+        .id = NULL, \
+        .payload = NULL \
     }
 
 ssize_t
@@ -3472,6 +3472,17 @@ build_ndef_msg(ControlClient client,
         ndef_rec_set_type_len(ndef, res);
         off += res;
 
+        if (flags & NDEF_FLAG_IL) {
+            /* decode id */
+            res = decode_base64(record->id, strlen(record->id),
+                                buf+off, len-off);
+            if (res < 0) {
+                return -1;
+            }
+            ndef_rec_set_id_len(ndef, res);
+            off += res;
+        }
+
         /* decode payload */
         res = decode_base64(record->payload, strlen(record->payload),
                             buf+off, len-off);
@@ -3485,17 +3496,6 @@ build_ndef_msg(ControlClient client,
         }
         ndef_rec_set_payload_len(ndef, res);
         off += res;
-
-        if (flags & NDEF_FLAG_IL) {
-            /* decode id */
-            res = decode_base64(record->id, strlen(record->id),
-                                buf+off, len-off);
-            if (res < 0) {
-                return -1;
-            }
-            ndef_rec_set_id_len(ndef, res);
-            off += res;
-        }
     }
     return off;
 }
@@ -3590,18 +3590,18 @@ nfc_recv_process_ndef_cb(void* data, size_t len, const struct ndef_rec* ndef)
         tlen = encode_base64(ndef_rec_const_type(ndef),
                              ndef_rec_type_len(ndef),
                              base64[0], sizeof(base64[0]));
+        ilen = encode_base64(ndef_rec_const_id(ndef), ndef_rec_id_len(ndef),
+                             base64[1], sizeof(base64[1]));
         plen = encode_base64(ndef_rec_const_payload(ndef),
                              ndef_rec_payload_len(ndef),
-                             base64[1], sizeof(base64[1]));
-        ilen = encode_base64(ndef_rec_const_id(ndef), ndef_rec_id_len(ndef),
                              base64[2], sizeof(base64[2]));
 
         /* print NDEF message in JSON format */
         control_write(param->client,
                       "{\"tnf\": %d,"
                       " \"type\": \"%.*s\","
-                      " \"payload\": \"%.*s\","
-                      " \"id\": \"%.*s\"}",
+                      " \"id\": \"%.*s\","
+                      " \"payload\": \"%.*s\"}",
                       ndef->flags & NDEF_TNF_BITS,
                       tlen, base64[0], plen, base64[1], ilen, base64[2]);
 
@@ -3785,12 +3785,12 @@ parse_ndef_rec(ControlClient client, char** args,
     if (parse_token_s(client, "NDEF type", " ,", args, &record->type, 0) < 0) {
         return -1;
     }
-    /* read payload */
-    if (parse_token_s(client, "NDEF payload", " ,", args, &record->payload, 0) < 0) {
+    /* read id; might by empty */
+    if (parse_token_s(client, "NDEF id", " ,", args, &record->id, 1) < 0) {
         return -1;
     }
-    /* read id; might by empty */
-    if (parse_token_s(client, "NDEF id", "]", args, &record->id, 1) < 0) {
+    /* read payload */
+    if (parse_token_s(client, "NDEF payload", "]", args, &record->payload, 0) < 0) {
         return -1;
     }
     return 0;
@@ -3865,6 +3865,36 @@ parse_rf_index(ControlClient client, char** args, long* rf)
 }
 
 static int
+parse_nci_deactivate_ntf_type(ControlClient client, char** args, unsigned long* dtype)
+{
+    assert(dtype);
+
+    if (parse_token_ul(client, "deactivate notification type", " ", args, dtype) < 0) {
+        return -1;
+    }
+    if (!(*dtype < NUMBER_OF_NCI_RF_DEACT_TYPE)) {
+        control_write(client, "KO: unknown deactivate notification type %lu\r\n", *dtype);
+        return -1;
+    }
+    return 0;
+}
+
+static int
+parse_nci_deactivate_ntf_reason(ControlClient client, char** args, unsigned long* dreason)
+{
+    assert(dreason);
+
+    if (parse_token_ul(client, "deactivate notification reason", " ", args, dreason) < 0) {
+        return -1;
+    }
+    if (!(*dreason < NUMBER_OF_NCI_RF_DEACT_REASON)) {
+        control_write(client, "KO: unknown deactivate notification reason %lu\r\n", *dreason);
+        return -1;
+    }
+    return 0;
+}
+
+static int
 do_nfc_snep( ControlClient  client, char*  args )
 {
     char *p;
@@ -3928,6 +3958,8 @@ struct nfc_ntf_param {
     struct nfc_re* re;
     unsigned long ntype;
     long rf;
+    unsigned long dreason;
+    unsigned long dtype;
 };
 
 #define NFC_NTF_PARAM_INIT(_client) \
@@ -3935,7 +3967,9 @@ struct nfc_ntf_param {
       .client = (_client), \
       .re = NULL, \
       .ntype = 0, \
-      .rf = -1 \
+      .rf = -1, \
+      .dreason = 0, \
+      .dtype = 0 \
     }
 
 static ssize_t
@@ -3971,29 +4005,10 @@ nfc_rf_intf_activated_ntf_cb(void* data,
     if (nfc->active_rf) {
         // Already select an active rf interface,so do nothing.
     } else if (param->rf == -1) {
-        // Auto select active rf interface based on remote-endpoint protocol.
-        enum nci_rf_interface iface;
-
-        switch(param->re->rfproto) {
-            case NCI_RF_PROTOCOL_T1T:
-            case NCI_RF_PROTOCOL_T2T:
-            case NCI_RF_PROTOCOL_T3T:
-                iface = NCI_RF_INTERFACE_FRAME;
-                break;
-            case NCI_RF_PROTOCOL_NFC_DEP:
-                iface = NCI_RF_INTERFACE_NFC_DEP;
-                break;
-            case NCI_RF_PROTOCOL_ISO_DEP:
-                iface = NCI_RF_INTERFACE_ISO_DEP;
-                break;
-            default:
-                control_write(param->client,
-                              "KO: invalid remote-endpoint protocol '%d'\n",
-                              param->re->rfproto);
-                return -1;
-        }
-
-        nfc->active_rf = nfc_find_rf_by_rf_interface(nfc, iface);
+        // Auto select active rf interface based on remote-endpoint protocol and mode.
+        nfc->active_rf = nfc_find_rf_by_protocol_and_mode(nfc,
+                                                          param->re->rfproto,
+                                                          param->re->mode);
         if (!nfc->active_rf) {
             control_write(param->client, "KO: no active rf interface\r\n");
             return -1;
@@ -4001,9 +4016,29 @@ nfc_rf_intf_activated_ntf_cb(void* data,
     } else {
         nfc->active_rf = nfc->rf + param->rf;
     }
+
     res = nfc_create_rf_intf_activated_ntf(param->re, nfc, ntf);
     if (res < 0) {
         control_write(param->client, "KO: rf_intf_activated_ntf failed\r\n");
+        return -1;
+    }
+    return res;
+}
+
+static ssize_t
+nfc_rf_intf_deactivate_ntf_cb(void* data,
+                              struct nfc_device* nfc, size_t maxlen,
+                              union nci_packet* ntf)
+{
+    ssize_t res;
+    struct nfc_ntf_param* param = data;
+
+    assert(data);
+    assert(nfc);
+
+    res = nfc_create_deactivate_ntf(param->dtype, param->dreason, ntf);
+    if (res < 0) {
+        control_write(param->client, "KO: rf_intf_deactivate_ntf failed\r\n");
         return -1;
     }
     return res;
@@ -4069,6 +4104,25 @@ do_nfc_nci( ControlClient  client, char*  args )
         /* generate RF_INTF_ACTIVATED_NTF; if param.re == NULL,
          * active RE will be used */
         if (goldfish_nfc_send_ntf(nfc_rf_intf_activated_ntf_cb, &param) < 0) {
+            /* error message generated in create function */
+            return -1;
+        }
+    } else if (!strcmp(p, "rf_intf_deactivate_ntf")) {
+        struct nfc_ntf_param param = NFC_NTF_PARAM_INIT(client);
+        if (args && *args) {
+            /* read deactivate ntf type */
+            if (parse_nci_deactivate_ntf_type(client, &args, &param.dtype) < 0) {
+                return -1;
+            }
+            /* read deactivate ntf reason */
+            if (parse_nci_deactivate_ntf_reason(client, &args, &param.dreason) < 0) {
+                return -1;
+            }
+        } else {
+            param.dtype = NCI_RF_DEACT_DISCOVERY;
+            param.dreason = NCI_RF_DEACT_RF_LINK_LOSS;
+        }
+        if (goldfish_nfc_send_ntf(nfc_rf_intf_deactivate_ntf_cb, &param) < 0) {
             /* error message generated in create function */
             return -1;
         }
@@ -4209,6 +4263,19 @@ do_nfc_tag( ControlClient client, char*  args )
         if (nfc_tag_set_data(re->tag, buf, res) < 0) {
             return -1;
         }
+    } else if (!strcmp(p, "clear")) {
+        unsigned long i;
+        struct nfc_re* re;
+
+        /* read remote-endpoint index */
+        if (parse_re_index(client, &args, ARRAY_SIZE(nfc_res), &i) < 0) {
+            return -1;
+        }
+        re = nfc_res + i;
+
+        if (nfc_tag_set_data(re->tag, NULL, 0) < 0) {
+            return -1;
+        }
     }
 
     return 0;
@@ -4220,13 +4287,15 @@ static const CommandDefRec  nfc_commands[] =
       "'nfc nci rf_intf_activated_ntf' send RC_DISCOVER_NTF for selected Remote Endpoint\r\n"
       "'nfc nci rf_intf_activated_ntf <i>' send RC_DISCOVER_NTF for Remote Endpoint <i>, auto detect rf\r\n"
       "'nfc nci rf_intf_activated_ntf <i> -1' send RC_DISCOVER_NTF for Remote Endpoint <i>, auto detect rf\r\n"
-      "'nfc nci rf_intf_activated_ntf <i> <j>' send RC_DISCOVER_NTF for Remote Endpoint <i> & RF interface <j>\r\n",
+      "'nfc nci rf_intf_activated_ntf <i> <j>' send RC_DISCOVER_NTF for Remote Endpoint <i> & RF interface <j>\r\n"
+      "'nfc nci rf_intf_deactivate_ntf' send RC_DEACTIVATE_NTF with default deactivate type & reason\r\n"
+      "'nfc nci rf_intf_deactivate_ntf <type> <reason>' send RC_DEACTIVATE_NTF with deactivate type <type> & reason <reason>\r\n",
       NULL,
       do_nfc_nci, NULL },
 
     { "snep", "put and read NDEF messages",
-      "'nfc snep put <dsap> <ssap> <[<flags>,<tnf>,<type>,<payload>,<id>]>' sends NDEF records of the given parameters\r\n"
-      "'nfc snep put <dsap> <ssap> <[<flags>,<tnf>,<type>,<payload>,]>' sends NDEF records of the given parameters without ID field\r\n",
+      "'nfc snep put <dsap> <ssap> <[<flags>,<tnf>,<type>,<id>,<payload>]>' sends NDEF records of the given parameters\r\n"
+      "'nfc snep put <dsap> <ssap> <[<flags>,<tnf>,<type>,,<payload>]>' sends NDEF records of the given parameters without ID field\r\n",
       NULL,
       do_nfc_snep, NULL },
 
@@ -4236,7 +4305,8 @@ static const CommandDefRec  nfc_commands[] =
       do_nfc_llcp, NULL },
 
     { "tag", "data handling",
-      "'nfc tag set <i> <[<flags>,<tnf>,<type>,<payload>,]>' set NDEF data to Remote Endpoint <i>\r\n",
+      "'nfc tag set <i> <[<flags>,<tnf>,<type>,,<payload>]>' set NDEF data to Remote Endpoint <i>\r\n"
+      "'nfc tag clear <i>' clear tag data of Remote Endpoint <i>\r\n",
       NULL,
       do_nfc_tag, NULL },
 

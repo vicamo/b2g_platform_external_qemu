@@ -208,7 +208,7 @@ idle_process_oid_core_reset_cmd(const union nci_packet* cmd,
     }
 
     rsp->control.payload[0] = NCI_STATUS_OK;
-    rsp->control.payload[1] = NCI_VERSION_1_0;
+    rsp->control.payload[1] = NCI_VERSION_1_0; /* Nexus 4 returns 0x0f here */
     rsp->control.payload[2] = cmd->control.payload[0];
 
     return create_control_rsp(rsp, NCI_PBF_END, cmd->control.gid,
@@ -393,16 +393,17 @@ reset_process_oid_core_init_cmd(const union nci_packet* cmd,
     payload->status = NCI_STATUS_OK;
     payload->features = cpu_to_le32(0x0);
     payload->nrfs = NUMBER_OF_SUPPORTED_NCI_RF_INTERFACES;
+
+    for (i = 0; i < payload->nrfs; ++i) {
+        payload->rf[i] = nfc->rf[i].iface;
+    }
+
     payload->nconns = 0;
     payload->maxrtabsize = cpu_to_le16(0x0);
     payload->payloadsize = 255;
     payload->maxlparamsize = cpu_to_le16(0x0);
     payload->vendor = 0x0;
     payload->device = cpu_to_le32(0x0);
-
-    for (i = 0; i < payload->nrfs; i++) {
-        payload->rf[i] = nfc->rf[i].iface;
-    }
 
     return create_control_rsp(rsp, NCI_PBF_END, cmd->control.gid,
                               cmd->control.oid, sizeof(*payload));
@@ -626,7 +627,7 @@ init_process_oid_rf_discover_select_cmd(const union nci_packet* cmd,
     }
 
     /* make RF active */
-    nfc->active_rf = nfc_find_rf_by_rf_interface(nfc, payload->iface);
+    nfc->active_rf = nfc_find_rf_by_protocol_and_mode(nfc, re->rfproto, re->mode);
     if (!nfc->active_rf) {
         goto status_rejected;
     }
@@ -740,13 +741,54 @@ init_process_oid_rf_deactivate_cmd(const union nci_packet* cmd,
     if (send_ntf) {
         struct nfc_deactivate_ntf_param* data;
 
-        data = g_malloc(sizeof(struct nfc_deactivate_ntf_param));
+        data = g_malloc(sizeof(*data));
         data->type = payload->type;
         data->reason = NCI_RF_DEACT_DH_REQUEST;
 
         nfc_delivery_cb_setup(cb, NTFN_BUF, data,
             nfc_delivery_deactivate_cmd_cb);
     }
+
+    return create_control_status_rsp(rsp, cmd->control.gid,
+                                     cmd->control.oid, NCI_STATUS_OK);
+}
+
+struct nfc_t3t_polling_ntf_param {
+    struct nfc_re* re;
+};
+
+static ssize_t
+nfc_delivery_t3t_polling_cmd_cb(void* data, union nci_packet* pkt)
+{
+    struct nfc_t3t_polling_ntf_param* param;
+    ssize_t res;
+
+    assert(data);
+
+    param = (struct nfc_t3t_polling_ntf_param*)data;
+    res = nfc_create_t3t_polling_ntf(param->re, pkt);
+
+    g_free(param);
+
+    return res;
+}
+
+/* [NCI] 8.2.2.2 */
+static size_t
+init_process_oid_t3t_polling_cmd(const union nci_packet* cmd,
+                                 struct nfc_device* nfc,
+                                 union nci_packet* rsp,
+                                 struct nfc_delivery_cb* cb)
+{
+    /* We do nothing here except send notification to HOST */
+    struct nfc_t3t_polling_ntf_param* ntf;
+
+    ntf = g_malloc(sizeof(*ntf));
+
+    ntf->re = nfc->active_re;
+
+    nfc_delivery_cb_setup(cb, NTFN_BUF, ntf,
+        nfc_delivery_t3t_polling_cmd_cb);
 
     return create_control_status_rsp(rsp, cmd->control.gid,
                                      cmd->control.oid, NCI_STATUS_OK);
@@ -901,7 +943,7 @@ init_process_cmd(const union nci_packet* cmd, struct nfc_device* nfc,
         [NCI_OID_RF_DISCOVER_CMD] = init_process_oid_rf_discover_cmd,
         [NCI_OID_RF_DISCOVER_SELECT_CMD] = init_process_oid_rf_discover_select_cmd,
         [NCI_OID_RF_DEACTIVATED_CMD] = init_process_oid_rf_deactivate_cmd,
-        [NCI_OID_RF_T3T_POLLING_CMD] = NULL,
+        [NCI_OID_RF_T3T_POLLING_CMD] = init_process_oid_t3t_polling_cmd,
         [NCI_OID_RF_PARAMETER_UPDATE_CMD] = NULL
     };
     static size_t (* const nfcee_oid[NUMBER_OF_NCI_CMDS])
@@ -1170,6 +1212,43 @@ nfc_create_deactivate_ntf(enum nci_rf_deactivation_type type,
                               NCI_OID_RF_DEACTIVATED_NTF,
                               sizeof(*payload));
 }
+
+size_t
+nfc_create_t3t_polling_ntf(const struct nfc_re* re, union nci_packet* ntf)
+{
+    struct nci_t3t_polling_ntf* payload;
+    uint8_t* p;
+
+    assert(ntf);
+
+    /* [NCI] Table74. */
+    payload = (struct nci_t3t_polling_ntf*)ntf->control.payload;
+
+    payload->status = NCI_STATUS_OK;
+    payload->nres = 1;
+
+    p = payload->res + 1;
+
+    /* [Digital] 6.6.2 SENSF_RES Response, Byte 2-17/19 */
+    memcpy(p, re->nfcid2, sizeof(re->nfcid2));
+    p += sizeof(re->nfcid2);
+
+    *p++ = 0xff;       // PAD0
+    *p++ = 0xff;
+    *p++ = ANY_VALUE;  // PAD1
+    *p++ = ANY_VALUE;
+    *p++ = ANY_VALUE;
+    *p++ = 0x01;       // MRT check
+    *p++ = 0x43;       // MRT update
+    *p = ANY_VALUE;    // PAD2
+
+    *payload->res = p - (payload->res);
+
+    return nfc_create_nci_ntf(ntf, NCI_PBF_END, NCI_GID_RF,
+                              NCI_OID_RF_T3T_POLLING_NTF,
+                              sizeof(*payload));
+}
+
 
 size_t
 nfc_create_rf_field_info_ntf(struct nfc_device* nfc,

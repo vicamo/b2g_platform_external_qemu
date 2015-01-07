@@ -70,7 +70,7 @@ struct nfc_rf {
 };
 
 void
-nfc_rf_init(struct nfc_rf* rf, enum nci_rf_interface iface);
+nfc_rf_init(struct nfc_rf* rf, enum nci_rf_interface iface, enum nci_rf_tech_mode mode);
 
 enum nfc_rfst
 nfc_rf_state_transition(enum nfc_rfst* rf_state, unsigned long bits,
