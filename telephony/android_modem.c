@@ -1227,16 +1227,30 @@ amodem_add_inbound_call( AModem  modem, const char*  number, const int  numPrese
     ACall       call  = &vcall->call;
     int         len;
     char        cnapName[ A_CALL_NAME_MAX_SIZE+1 ];
+    int         voice_call_count;
+    int         nn;
 
     if (call == NULL)
         return -1;
 
     call->dir   = A_CALL_INBOUND;
-    call->state = A_CALL_INCOMING;
     call->mode  = A_CALL_VOICE;
     call->multi = 0;
 
+    voice_call_count = 0;
+    for (nn = 0; nn < modem->call_count; nn++) {
+      AVoiceCall  vcall = modem->calls + nn;
+      ACall       call  = &vcall->call;
+      if (call->mode == A_CALL_VOICE) {
+        voice_call_count++;
+      }
+    }
+
+    call->state = (voice_call_count == 1) ? A_CALL_INCOMING : A_CALL_WAITING;
+
     vcall->is_remote = (remote_number_string_to_port(number, modem, NULL, NULL) > 0);
+
+    vcall->timer = NULL;
 
     len  = strlen(number);
     if (len >= sizeof(call->number))
@@ -3125,6 +3139,8 @@ handleDial( const char*  cmd, AModem  modem )
         call->number[len] = 0;
     }
 
+    call->numberPresentation = 0;
+
     amodem_send_calls_update( modem );
 
     amodem_begin_line( modem );
@@ -3205,6 +3221,20 @@ handleSignalStrength( const char*  cmd, AModem  modem )
     return amodem_end_line( modem );
 }
 
+static int
+hasWaitingCall( AModem  modem )
+{
+  int nn;
+  for (nn = 0; nn < modem->call_count; nn++) {
+    AVoiceCall  vcall = modem->calls + nn;
+    ACall       call  = &vcall->call;
+    if (call->mode == A_CALL_VOICE && call->state == A_CALL_WAITING) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static const char*
 handleHangup( const char*  cmd, AModem  modem )
 {
@@ -3229,6 +3259,7 @@ handleHangup( const char*  cmd, AModem  modem )
 
             case '1':
                 if (cmd[1] == 0) { /* release all active, accept held one */
+                    int waitingCallOnly = hasWaitingCall(modem);
                     for (nn = 0; nn < modem->call_count; nn++) {
                         AVoiceCall  vcall = modem->calls + nn;
                         ACall       call  = &vcall->call;
@@ -3238,7 +3269,7 @@ handleHangup( const char*  cmd, AModem  modem )
                             amodem_free_call(modem, vcall, CALL_FAIL_NORMAL);
                             nn--;
                         }
-                        else if (call->state == A_CALL_HELD     ||
+                        else if ((call->state == A_CALL_HELD && !waitingCallOnly) ||
                                  call->state == A_CALL_WAITING) {
                             acall_set_state( vcall, A_CALL_ACTIVE );
                         }
@@ -3253,6 +3284,7 @@ handleHangup( const char*  cmd, AModem  modem )
 
             case '2':
                 if (cmd[1] == 0) {  /* place all active on hold, accept held or waiting one */
+                    int waitingCallOnly = hasWaitingCall(modem);
                     for (nn = 0; nn < modem->call_count; nn++) {
                         AVoiceCall  vcall = modem->calls + nn;
                         ACall       call  = &vcall->call;
@@ -3261,7 +3293,7 @@ handleHangup( const char*  cmd, AModem  modem )
                         if (call->state == A_CALL_ACTIVE) {
                             acall_set_state( vcall, A_CALL_HELD );
                         }
-                        else if (call->state == A_CALL_HELD     ||
+                        else if ((call->state == A_CALL_HELD && !waitingCallOnly) ||
                                  call->state == A_CALL_WAITING) {
                             acall_set_state( vcall, A_CALL_ACTIVE );
                         }
