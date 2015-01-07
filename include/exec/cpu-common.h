@@ -1,13 +1,11 @@
 #ifndef CPU_COMMON_H
 #define CPU_COMMON_H 1
 
-/* CPU interfaces that are target indpendent.  */
+#include "qemu-common.h"
 
-#if defined(__arm__) || defined(__sparc__) || defined(__mips__) || defined(__hppa__) || defined(__ia64__)
-#define WORDS_ALIGNED
-#endif
+/* CPU interfaces that are target independent.  */
 
-#ifdef TARGET_PHYS_ADDR_BITS
+#ifndef CONFIG_USER_ONLY
 #include "exec/hwaddr.h"
 #endif
 
@@ -18,19 +16,51 @@
 #include "qemu/bswap.h"
 #include "qemu/queue.h"
 
+/**
+ * CPUListState:
+ * @cpu_fprintf: Print function.
+ * @file: File to print to using @cpu_fprint.
+ *
+ * State commonly used for iterating over CPU models.
+ */
+typedef struct CPUListState {
+    fprintf_function cpu_fprintf;
+    FILE *file;
+} CPUListState;
+
 #if !defined(CONFIG_USER_ONLY)
 
+enum device_endian {
+    DEVICE_NATIVE_ENDIAN,
+    DEVICE_BIG_ENDIAN,
+    DEVICE_LITTLE_ENDIAN,
+};
+
 /* address in the RAM (different from a physical address) */
-typedef unsigned long ram_addr_t;
+#if defined(CONFIG_XEN_BACKEND)
+typedef uint64_t ram_addr_t;
+#  define RAM_ADDR_MAX UINT64_MAX
+#  define RAM_ADDR_FMT "%" PRIx64
+#else
+typedef uintptr_t ram_addr_t;
+#  define RAM_ADDR_MAX UINTPTR_MAX
+#  define RAM_ADDR_FMT "%" PRIxPTR
+#endif
 
 /* memory API */
+
+/* MMIO pages are identified by a combination of an IO device index and
+   3 flags.  The ROMD code stores the page ram offset in iotlb entry,
+   so only a limited number of ids are avaiable.  */
+
+#define IO_MEM_NB_ENTRIES  (1 << (TARGET_PAGE_BITS  - IO_MEM_SHIFT))
 
 typedef void CPUWriteMemoryFunc(void *opaque, hwaddr addr, uint32_t value);
 typedef uint32_t CPUReadMemoryFunc(void *opaque, hwaddr addr);
 
 void cpu_register_physical_memory_log(hwaddr start_addr,
-                                         ram_addr_t size,
-                                         ram_addr_t phys_offset,
+                                      ram_addr_t size,
+                                      ram_addr_t phys_offset,
                                       ram_addr_t region_offset,
                                       bool log_dirty);
 
@@ -70,17 +100,17 @@ int cpu_register_io_memory(CPUReadMemoryFunc * const *mem_read,
                            void *opaque);
 void cpu_unregister_io_memory(int table_address);
 
-void cpu_physical_memory_rw(hwaddr addr, uint8_t *buf,
+void cpu_physical_memory_rw(hwaddr addr, void *buf,
                             int len, int is_write);
 static inline void cpu_physical_memory_read(hwaddr addr,
-                                            uint8_t *buf, int len)
+                                            void *buf, int len)
 {
     cpu_physical_memory_rw(addr, buf, len, 0);
 }
 static inline void cpu_physical_memory_write(hwaddr addr,
-                                             const uint8_t *buf, int len)
+                                             const void *buf, int len)
 {
-    cpu_physical_memory_rw(addr, (uint8_t *)buf, len, 1);
+    cpu_physical_memory_rw(addr, (void*)buf, len, 1);
 }
 void *cpu_physical_memory_map(hwaddr addr,
                               hwaddr *plen,
@@ -102,7 +132,7 @@ void stl_phys(hwaddr addr, uint32_t val);
 void stq_phys(hwaddr addr, uint64_t val);
 
 void cpu_physical_memory_write_rom(hwaddr addr,
-                                   const uint8_t *buf, int len);
+                                   const void *buf, int len);
 
 #define IO_MEM_SHIFT       3
 

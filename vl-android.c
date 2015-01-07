@@ -41,6 +41,7 @@
 #include "ui/console.h"
 #include "sysemu/sysemu.h"
 #include "exec/gdbstub.h"
+#include "qemu/log.h"
 #include "qemu/timer.h"
 #include "sysemu/char.h"
 #include "sysemu/blockdev.h"
@@ -49,6 +50,7 @@
 #include "migration/qemu-file.h"
 #include "android/android.h"
 #include "android/charpipe.h"
+#include "android/log-rotate.h"
 #include "modem_driver.h"
 #include "android/gps.h"
 #include "android/hw-kmsg.h"
@@ -213,11 +215,6 @@ int qemu_main(int argc, char **argv, char **envp);
 
 #include "android/snaphost-android.h"
 
-#ifdef CONFIG_STANDALONE_CORE
-/* Verbose value used by the standalone emulator core (without UI) */
-unsigned long long  android_verbose;
-#endif  // CONFIG_STANDALONE_CORE
-
 #if !defined(CONFIG_STANDALONE_CORE)
 /* in android/qemulator.c */
 extern void  android_emulator_set_base_port(int  port);
@@ -229,10 +226,6 @@ extern void  android_emulator_set_base_port(int  port);
 #endif
 
 #include "disas/disas.h"
-
-#ifdef CONFIG_TRACE
-#include "android/trace.h"
-#endif
 
 #include "qemu/sockets.h"
 
@@ -407,7 +400,6 @@ extern void  dprint( const char* format, ... );
 
 const char* dns_log_filename = NULL;
 const char* drop_log_filename = NULL;
-static int rotate_logs_requested = 0;
 
 const char* savevm_on_exit = NULL;
 
@@ -515,52 +507,6 @@ static void default_ioport_writel(void *opaque, uint32_t address, uint32_t data)
 #endif
 }
 
-/*
- * Sets a flag (rotate_logs_requested) to clear both the DNS and the
- * drop logs upon receiving a SIGUSR1 signal. We need to clear the logs
- * between the tasks that do not require restarting Qemu.
- */
-void rotate_qemu_logs_handler(int signum) {
-  rotate_logs_requested = 1;
-}
-
-/*
- * Resets the rotate_log_requested_flag. Normally called after qemu
- * logs has been rotated.
- */
-void reset_rotate_qemu_logs_request(void) {
-  rotate_logs_requested = 0;
-}
-
-/*
- * Clears the passed qemu log when the rotate_logs_requested
- * is set. We need to clear the logs between the tasks that do not
- * require restarting Qemu.
- */
-FILE* rotate_qemu_log(FILE* old_log_fd, const char* filename) {
-  FILE* new_log_fd = NULL;
-  if (old_log_fd) {
-    if (fclose(old_log_fd) == -1) {
-      fprintf(stderr, "Cannot close old_log fd\n");
-      exit(errno);
-    }
-  }
-
-  if (!filename) {
-    fprintf(stderr, "The log filename to be rotated is not provided");
-    exit(-1);
-  }
-
-  new_log_fd = fopen(filename , "wb+");
-  if (new_log_fd == NULL) {
-    fprintf(stderr, "Cannot open the log file: %s for write.\n",
-            filename);
-    exit(1);
-  }
-
-  return new_log_fd;
-}
-
 /***************/
 /* ballooning */
 
@@ -622,62 +568,6 @@ int qemu_timedate_diff(struct tm *tm)
 
     return seconds - time(NULL);
 }
-
-
-#ifdef CONFIG_TRACE
-int tbflush_requested;
-static int exit_requested;
-
-void start_tracing()
-{
-  if (trace_filename == NULL)
-    return;
-  if (!tracing) {
-    fprintf(stderr,"-- start tracing --\n");
-    start_time = Now();
-  }
-  tracing = 1;
-  tbflush_requested = 1;
-  qemu_notify_event();
-}
-
-void stop_tracing()
-{
-  if (trace_filename == NULL)
-    return;
-  if (tracing) {
-    end_time = Now();
-    elapsed_usecs += end_time - start_time;
-    fprintf(stderr,"-- stop tracing --\n");
-  }
-  tracing = 0;
-  tbflush_requested = 1;
-  qemu_notify_event();
-}
-
-#ifndef _WIN32
-/* This is the handler for the SIGUSR1 and SIGUSR2 signals.
- * SIGUSR1 turns tracing on.  SIGUSR2 turns tracing off.
- */
-void sigusr_handler(int sig)
-{
-  if (sig == SIGUSR1)
-    start_tracing();
-  else
-    stop_tracing();
-}
-#endif
-
-/* This is the handler to catch control-C so that we can exit cleanly.
- * This is needed when tracing to flush the buffers to disk.
- */
-void sigint_handler(int sig)
-{
-  exit_requested = 1;
-  qemu_notify_event();
-}
-#endif /* CONFIG_TRACE */
-
 
 /***********************************************************/
 /* Bluetooth support */
@@ -1848,14 +1738,14 @@ int qemu_powerdown_requested(void)
     return r;
 }
 
-static int qemu_debug_requested(void)
+int qemu_debug_requested(void)
 {
     int r = debug_requested;
     debug_requested = 0;
     return r;
 }
 
-static int qemu_vmstop_requested(void)
+int qemu_vmstop_requested(void)
 {
     int r = vmstop_requested;
     vmstop_requested = 0;
@@ -1917,63 +1807,7 @@ void qemu_system_powerdown_request(void)
     qemu_notify_event();
 }
 
-#ifdef CONFIG_IOTHREAD
-static void qemu_system_vmstop_request(int reason)
-{
-    vmstop_requested = reason;
-    qemu_notify_event();
-}
-#endif
-
-void main_loop_wait(int timeout)
-{
-    fd_set rfds, wfds, xfds;
-    int ret, nfds;
-    struct timeval tv;
-
-    qemu_bh_update_timeout(&timeout);
-
-    os_host_main_loop_wait(&timeout);
-
-
-    tv.tv_sec = timeout / 1000;
-    tv.tv_usec = (timeout % 1000) * 1000;
-
-    /* poll any events */
-
-    /* XXX: separate device handlers from system ones */
-    nfds = -1;
-    FD_ZERO(&rfds);
-    FD_ZERO(&wfds);
-    FD_ZERO(&xfds);
-    qemu_iohandler_fill(&nfds, &rfds, &wfds, &xfds);
-    if (slirp_is_inited()) {
-        slirp_select_fill(&nfds, &rfds, &wfds, &xfds);
-    }
-
-    qemu_mutex_unlock_iothread();
-    ret = select(nfds + 1, &rfds, &wfds, &xfds, &tv);
-    qemu_mutex_lock_iothread();
-    qemu_iohandler_poll(&rfds, &wfds, &xfds, ret);
-    if (slirp_is_inited()) {
-        if (ret < 0) {
-            FD_ZERO(&rfds);
-            FD_ZERO(&wfds);
-            FD_ZERO(&xfds);
-        }
-        slirp_select_poll(&rfds, &wfds, &xfds);
-    }
-    charpipe_poll();
-
-    qemu_run_all_timers();
-
-    /* Check bottom-halves last in case any of the earlier events triggered
-       them.  */
-    qemu_bh_poll();
-
-}
-
-static int vm_can_run(void)
+int vm_can_run(void)
 {
     if (powerdown_requested)
         return 0;
@@ -1984,78 +1818,6 @@ static int vm_can_run(void)
     if (debug_requested)
         return 0;
     return 1;
-}
-
-static void main_loop(void)
-{
-    int r;
-
-#ifdef CONFIG_IOTHREAD
-    qemu_system_ready = 1;
-    qemu_cond_broadcast(&qemu_system_cond);
-#endif
-
-#ifdef CONFIG_HAX
-    if (hax_enabled())
-        hax_sync_vcpus();
-#endif
-
-    for (;;) {
-        do {
-#ifdef CONFIG_PROFILER
-            int64_t ti;
-#endif
-#ifndef CONFIG_IOTHREAD
-            tcg_cpu_exec();
-#endif
-#ifdef CONFIG_PROFILER
-            ti = profile_getclock();
-#endif
-            main_loop_wait(qemu_calculate_timeout());
-#ifdef CONFIG_PROFILER
-            dev_time += profile_getclock() - ti;
-#endif
-
-            if (rotate_logs_requested) {
-                FILE* new_dns_log_fd = rotate_qemu_log(get_slirp_dns_log_fd(),
-                                                        dns_log_filename);
-                FILE* new_drop_log_fd = rotate_qemu_log(get_slirp_drop_log_fd(),
-                                                         drop_log_filename);
-                slirp_dns_log_fd(new_dns_log_fd);
-                slirp_drop_log_fd(new_drop_log_fd);
-                reset_rotate_qemu_logs_request();
-            }
-
-        } while (vm_can_run());
-
-        if (qemu_debug_requested())
-            vm_stop(EXCP_DEBUG);
-        if (qemu_shutdown_requested()) {
-            if (no_shutdown) {
-                vm_stop(0);
-                no_shutdown = 0;
-            } else {
-                if (savevm_on_exit != NULL) {
-                  /* Prior to saving VM to the snapshot file, save HW config
-                   * settings for that VM, so we can match them when VM gets
-                   * loaded from the snapshot. */
-                  snaphost_save_config(savevm_on_exit);
-                  do_savevm(cur_mon, savevm_on_exit);
-                }
-                break;
-            }
-        }
-        if (qemu_reset_requested()) {
-            pause_all_vcpus();
-            qemu_system_reset();
-            resume_all_vcpus();
-        }
-        if (qemu_powerdown_requested())
-            qemu_system_powerdown();
-        if ((r = qemu_vmstop_requested()))
-            vm_stop(r);
-    }
-    pause_all_vcpus();
 }
 
 void version(void)
@@ -2319,24 +2081,6 @@ parse_int(const char *str, int *result)
     return 0;
 }
 
-#ifndef _WIN32
-/*
- * Initializes the SIGUSR1 signal handler to clear Qemu logs.
- */
-void init_qemu_clear_logs_sig() {
-  struct sigaction act;
-  sigfillset(&act.sa_mask);
-  act.sa_flags = 0;
-  act.sa_handler = rotate_qemu_logs_handler;
-  if (sigaction(SIGUSR1, &act, NULL) == -1) {
-    fprintf(stderr, "Failed to setup SIGUSR1 handler to clear Qemu logs\n");
-    exit(-1);
-  }
-}
-#endif
-
-
-
 /* parses a null-terminated string specifying a network port (e.g., "80") or
  * port range (e.g., "[6666-7000]"). In case of a single port, lport and hport
  * are the same. Returns 0 on success, -1 on error. */
@@ -2529,7 +2273,7 @@ int main(int argc, char **argv, char **envp)
     const char *gdbstub_dev = NULL;
     uint32_t boot_devices_bitmap = 0;
     int i;
-    int snapshot, linux_boot, net_boot;
+    int snapshot, linux_boot, __attribute__((unused)) net_boot;
     const char *icount_option = NULL;
     const char *initrd_filename;
     const char *kernel_filename, *kernel_cmdline;
@@ -2561,7 +2305,9 @@ int main(int argc, char **argv, char **envp)
     int tb_size;
     const char *pid_file = NULL;
     const char *incoming = NULL;
-    CPUState *env;
+    const char* log_mask = NULL;
+    const char* log_file = NULL;
+    CPUOldState *env;
     int show_vnc_port = 0;
     IniFile*  hw_ini = NULL;
     STRALLOC_DEFINE(kernel_params);
@@ -2576,7 +2322,7 @@ int main(int argc, char **argv, char **envp)
 
     init_clocks();
 
-    qemu_cache_utils_init(envp);
+    qemu_cache_utils_init();
 
     QLIST_INIT (&vm_change_state_head);
     os_setup_early_signal_handling();
@@ -2912,11 +2658,7 @@ int main(int argc, char **argv, char **envp)
                 }
 
                 /* On 32-bit hosts, QEMU is limited by virtual address space */
-                if (value > (2047 << 20)
-#ifndef CONFIG_KQEMU
-                    && HOST_LONG_BITS == 32
-#endif
-                    ) {
+                if (value > (2047 << 20) && HOST_LONG_BITS == 32) {
                     PANIC("qemu: at most 2047 MB RAM can be simulated");
                 }
                 if (value != (uint64_t)(ram_addr_t)value) {
@@ -2926,20 +2668,7 @@ int main(int argc, char **argv, char **envp)
                 break;
             }
             case QEMU_OPTION_d:
-                {
-                    int mask;
-                    const CPULogItem *item;
-
-                    mask = cpu_str_to_log_mask(optarg);
-                    if (!mask) {
-                        printf("Log items (comma separated):\n");
-                        for(item = cpu_log_items; item->mask != 0; item++) {
-                            printf("%-10s %s\n", item->name, item->help);
-                        }
-                        PANIC("Invalid parameter -d=%s", optarg);
-                    }
-                    cpu_set_log(mask);
-                }
+                log_mask = optarg;
                 break;
             case QEMU_OPTION_s:
                 gdbstub_dev = "tcp::" DEFAULT_GDBSTUB_PORT;
@@ -3332,38 +3061,6 @@ int main(int argc, char **argv, char **envp)
             case QEMU_OPTION_mic:
                 audio_input_source = (char*)optarg;
                 break;
-#ifdef CONFIG_TRACE
-            case QEMU_OPTION_trace:
-                trace_filename = optarg;
-                tracing = 1;
-                break;
-#if 0
-            case QEMU_OPTION_trace_miss:
-                trace_cache_miss = 1;
-                break;
-            case QEMU_OPTION_trace_addr:
-                trace_all_addr = 1;
-                break;
-#endif
-            case QEMU_OPTION_tracing:
-                if (strcmp(optarg, "off") == 0)
-                    tracing = 0;
-                else if (strcmp(optarg, "on") == 0 && trace_filename)
-                    tracing = 1;
-                else {
-                    PANIC("Unexpected option to -tracing ('%s')",
-                            optarg);
-                }
-                break;
-#if 0
-            case QEMU_OPTION_dcache_load_miss:
-                dcache_load_miss_penalty = atoi(optarg);
-                break;
-            case QEMU_OPTION_dcache_store_miss:
-                dcache_store_miss_penalty = atoi(optarg);
-                break;
-#endif
-#endif
 #ifdef CONFIG_NAND
             case QEMU_OPTION_nand:
                 nand_add_dev(optarg);
@@ -3962,16 +3659,28 @@ int main(int argc, char **argv, char **envp)
         exit(1);
     }
 
+    /* Open the logfile at this point, if necessary. We can't open the logfile
+     * when encountering either of the logging options (-d or -D) because the
+     * other one may be encountered later on the command line, changing the
+     * location or level of logging.
+     */
+    if (log_mask) {
+        int mask;
+        if (log_file) {
+            qemu_set_log_filename(log_file);
+        }
+
+        mask = qemu_str_to_log_mask(log_mask);
+        if (!mask) {
+            qemu_print_log_usage(stdout);
+            exit(1);
+        }
+        qemu_set_log(mask);
+    }
+  
 #if defined(CONFIG_KVM)
     if (kvm_allowed < 0) {
         kvm_allowed = kvm_check_allowed();
-    }
-#endif
-
-#if defined(CONFIG_KVM) && defined(CONFIG_KQEMU)
-    if (kvm_allowed && kqemu_allowed) {
-        PANIC(
-                "You can not enable both KVM and kqemu at the same time");
     }
 #endif
 
@@ -3991,10 +3700,6 @@ int main(int argc, char **argv, char **envp)
            monitor_device = "stdio";
     }
 
-#ifdef CONFIG_KQEMU
-    if (smp_cpus > 1)
-        kqemu_allowed = 0;
-#endif
     if (qemu_init_main_loop()) {
         PANIC("qemu_init_main_loop failed");
     }
@@ -4177,20 +3882,8 @@ int main(int argc, char **argv, char **envp)
         }
     }
 
-#ifdef CONFIG_KQEMU
-    /* FIXME: This is a nasty hack because kqemu can't cope with dynamic
-       guest ram allocation.  It needs to go away.  */
-    if (kqemu_allowed) {
-        kqemu_phys_ram_size = ram_size + 8 * 1024 * 1024 + 4 * 1024 * 1024;
-        kqemu_phys_ram_base = qemu_vmalloc(kqemu_phys_ram_size);
-        if (!kqemu_phys_ram_base) {
-            PANIC("Could not allocate physical memory");
-        }
-    }
-#endif
-
 #ifndef _WIN32
-    init_qemu_clear_logs_sig();
+    qemu_log_rotation_init();
 #endif
 
     /* init the dynamic translator */
@@ -4345,13 +4038,6 @@ int main(int argc, char **argv, char **envp)
     module_call_init(MODULE_INIT_DEVICE);
 
 
-#ifdef CONFIG_TRACE
-    if (trace_filename) {
-        trace_init(trace_filename);
-        fprintf(stderr, "-- When done tracing, exit the emulator. --\n");
-    }
-#endif
-
     /* Check the CPU Architecture value */
 #if defined(TARGET_ARM)
     if (strcmp(android_hw->hw_cpu_arch,"arm") != 0) {
@@ -4431,7 +4117,7 @@ int main(int argc, char **argv, char **envp)
 
     current_machine = machine;
 
-    /* Set KVM's vcpu state to qemu's initial CPUState. */
+    /* Set KVM's vcpu state to qemu's initial CPUOldState. */
     if (kvm_enabled()) {
         int ret;
 

@@ -44,7 +44,7 @@ static uint32_t smpboot[] = {
 
 static void main_cpu_reset(void *opaque)
 {
-    CPUState *env = opaque;
+    CPUARMState *env = opaque;
 
     cpu_reset(env);
     if (env->boot_info)
@@ -184,7 +184,7 @@ static void set_kernel_args_old(struct arm_boot_info *info,
     }
 }
 
-void arm_load_kernel(CPUState *env, struct arm_boot_info *info)
+void arm_load_kernel(CPUARMState *env, struct arm_boot_info *info)
 {
     int kernel_size;
     int initrd_size;
@@ -192,7 +192,6 @@ void arm_load_kernel(CPUState *env, struct arm_boot_info *info)
     int is_linux = 0;
     uint64_t elf_entry;
     hwaddr entry;
-    int big_endian;
 
     /* Load the kernel.  */
     if (!info->kernel_filename) {
@@ -203,12 +202,6 @@ void arm_load_kernel(CPUState *env, struct arm_boot_info *info)
     if (info->nb_cpus == 0)
         info->nb_cpus = 1;
     env->boot_info = info;
-
-#ifdef TARGET_WORDS_BIGENDIAN
-    big_endian = 1;
-#else
-    big_endian = 0;
-#endif
 
     /* Assume that raw images are linux kernels, and ELF images are not.  */
     kernel_size = load_elf(info->kernel_filename, 0, &elf_entry, NULL, NULL);

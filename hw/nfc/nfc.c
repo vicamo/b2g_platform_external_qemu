@@ -13,6 +13,7 @@
 #include <assert.h>
 #include <string.h>
 #include "qemu-common.h"
+#include "cpu.h"
 #include "hw/nfc/nfc.h"
 #include "hw/nfc/nci.h"
 

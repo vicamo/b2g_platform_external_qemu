@@ -27,6 +27,7 @@
 #include <android/utils/panic.h>
 #include <android/utils/path.h>
 #include <android/utils/bufprint.h>
+#include <android/utils/win32_cmdline_quote.h>
 #include <android/avd/util.h>
 
 /* Required by android/utils/debug.h */
@@ -66,10 +67,6 @@ unsigned long long android_verbose;
 static char* getTargetEmulatorPath(const char* progName, const char* avdArch, const int force_32bit);
 static char* getSharedLibraryPath(const char* progName, const char* libName);
 static void  prependSharedLibraryPath(const char* prefix);
-
-#ifdef _WIN32
-static char* quotePath(const char* path);
-#endif
 
 /* The execv() definition in mingw is slightly bogus.
  * It takes a second argument of type 'const char* const*'
@@ -156,18 +153,6 @@ int main(int argc, char** argv)
     /* Replace it in our command-line */
     argv[0] = emulatorPath;
 
-#ifdef _WIN32
-    /* Looks like execv() in mingw (or is it MSVCRT.DLL?) doesn't
-     * support a space in argv[0] unless we explicitely quote it.
-     * IMPORTANT: do not quote the first argument to execv() or it will fail.
-     * This was tested on a 32-bit Vista installation.
-     */
-    if (strchr(emulatorPath, ' ')) {
-        argv[0] = quotePath(emulatorPath);
-        D("Quoted emulator binary path: %s\n", emulatorPath);
-    }
-#endif
-
     /* We need to find the location of the GLES emulation shared libraries
      * and modify either LD_LIBRARY_PATH or PATH accordingly
      */
@@ -182,7 +167,22 @@ int main(int argc, char** argv)
         }
     }
 
-    /* Launch it with the same set of options ! */
+#ifdef _WIN32
+    // Take care of quoting all parameters before sending them to execv().
+    // See the "Eveyone quotes command line arguments the wrong way" on
+    // MSDN.
+    int n;
+    for (n = 0; n < argc; ++n) {
+        // Technically, this leaks the quoted strings, but we don't care
+        // since this process will terminate after the execv() anyway.
+        argv[n] = win32_cmdline_quote(argv[n]);
+        D("Quoted param: [%s]\n", argv[n]);
+    }
+#endif
+
+    // Launch it with the same set of options !
+    // Note that on Windows, the first argument must _not_ be quoted or
+    // Windows will fail to find the program.
     safe_execv(emulatorPath, argv);
 
     /* We could not launch the program ! */
@@ -190,6 +190,7 @@ int main(int argc, char** argv)
     return errno;
 }
 
+#ifndef _WIN32
 static int
 getHostOSBitness()
 {
@@ -213,6 +214,7 @@ getHostOSBitness()
   */
     return system("file -L \"$SHELL\" | grep -q \"x86[_-]64\"") == 0 ? 64 : 32;
 }
+#endif  // !_WIN32
 
 /* Find the target-specific emulator binary. This will be something
  * like  <programDir>/emulator-<targetArch>, where <programDir> is
@@ -407,19 +409,3 @@ prependSharedLibraryPath(const char* prefix)
     setenv("LD_LIBRARY_PATH", temp, 1);
 #endif
 }
-
-#ifdef _WIN32
-static char*
-quotePath(const char* path)
-{
-    int   len = strlen(path);
-    char* ret = malloc(len+3);
-
-    ret[0] = '"';
-    memcpy(ret+1, path, len);
-    ret[len+1] = '"';
-    ret[len+2] = '\0';
-
-    return ret;
-}
-#endif /* _WIN32 */

@@ -23,6 +23,7 @@
 #include <string.h>
 #include "android/utils/path.h"
 #include "android/utils/debug.h"
+#include "android/utils/eintr_wrapper.h"
 #include "android/utils/misc.h"
 #include "android/utils/system.h"
 
@@ -59,7 +60,7 @@
 #  define  QSOCKET_CALL(_ret,_cmd)   \
     do { \
         errno = 0; \
-        do { _ret = (_cmd); } while ( _ret < 0 && errno == EINTR ); \
+        _ret = HANDLE_EINTR(_cmd); \
     } while (0);
 #endif
 
@@ -1096,10 +1097,11 @@ socket_getoption(int  fd, int  domain, int  option, int  defaut)
         int  opt  = -1;
 #endif
         socklen_t  optlen = sizeof(opt);
-        ret = getsockopt(fd, domain, option, (char*)&opt, &optlen);
+        ret = HANDLE_EINTR(
+                getsockopt(fd, domain, option, (char*)&opt, &optlen));
         if (ret == 0)
             return (int)opt;
-        if (errno != EINTR)
+        else
             return defaut;
     }
 #undef OPT_CAST
@@ -1165,6 +1167,14 @@ int socket_set_oobinline(int  fd)
     return socket_setoption(fd, SOL_SOCKET, SO_OOBINLINE, 1);
 }
 
+int socket_set_cork(int fd, int v)
+{
+#if defined(SOL_TCP) && defined(TCP_CORK)
+    return socket_setoption(fd, SOL_TCP, TCP_CORK, v);
+#else
+    return 0;
+#endif
+}
 
 int  socket_set_nodelay(int  fd)
 {
@@ -1263,7 +1273,7 @@ socket_close( int  fd )
     int  old_errno = errno;
 
     shutdown( fd, SHUT_RDWR );
-    close( fd );
+    IGNORE_EINTR(close( fd ));
 
     errno = old_errno;
 }
@@ -1405,9 +1415,7 @@ socket_unix_server( const char*  name, SocketType  type )
 
     sock_address_init_unix( &addr, name );
 
-    do {
-        ret = unlink( name );
-    } while (ret < 0 && errno == EINTR);
+    HANDLE_EINTR(unlink(name));
 
     ret = socket_bind_server( s, &addr, type );
 
@@ -1565,4 +1573,25 @@ host_name( void )
         return "localhost";
     else
         return buf;
+}
+
+
+// Temporary work-arounds until we get rid of this source file.
+
+int qemu_getsockopt(int sock, int level, int optname, void* optval,
+                    size_t* optlen) {
+    socklen_t len = (socklen_t) *optlen;
+    int ret = getsockopt(sock, level, optname, (char*)optval, &len);
+    *optlen = (size_t) len;
+    return ret;
+}
+
+int qemu_setsockopt(int sock, int level, int optname, const void* optval,
+                    size_t optlen) {
+  return setsockopt(sock, level, optname, (const char*)optval,
+                    (socklen_t)optlen);
+}
+
+int qemu_recv(int sock, void* buf, size_t len, int flags) {
+  return recv(sock, buf, len, flags);
 }

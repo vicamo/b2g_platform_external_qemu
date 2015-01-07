@@ -19,7 +19,6 @@
 #include "android/globals.h"
 #include "android/hw-sensors.h"
 #include "telephony/modem_driver.h"
-#include "android/trace.h"
 #include "audio/audio.h"
 #include "android/protocol/core-commands-api.h"
 
@@ -54,11 +53,6 @@ corecmd_toggle_network()
 
 int corecmd_trace_control(int start)
 {
-    if (start) {
-        start_tracing();
-    } else {
-        stop_tracing();
-    }
     return 0;
 }
 

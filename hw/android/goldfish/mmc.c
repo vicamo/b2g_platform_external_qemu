@@ -9,8 +9,10 @@
 ** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 ** GNU General Public License for more details.
 */
+#include "cpu.h"
 #include "migration/qemu-file.h"
 #include "hw/android/goldfish/device.h"
+#include "hw/hw.h"
 #include "hw/mmc.h"
 #include "hw/sd.h"
 #include "block/block.h"
@@ -214,7 +216,6 @@ static int  goldfish_mmc_bdrv_write(struct goldfish_mmc_state *s,
 
 static void goldfish_mmc_do_command(struct goldfish_mmc_state *s, uint32_t cmd, uint32_t arg)
 {
-    int result;
     int new_status = MMC_STAT_END_OF_CMD;
     int opcode = cmd & 63;
 
@@ -371,7 +372,7 @@ static void goldfish_mmc_do_command(struct goldfish_mmc_state *s, uint32_t cmd, 
                 if (arg & 511) fprintf(stderr, "offset %d is not multiple of 512 when reading\n", arg);
                 arg /= s->block_length;
             }
-            result = goldfish_mmc_bdrv_read(s, arg, s->buffer_address, s->block_count);
+            goldfish_mmc_bdrv_read(s, arg, s->buffer_address, s->block_count);
             new_status |= MMC_STAT_END_OF_DATA;
             s->resp[0] = SET_R1_CURRENT_STATE(4) | R1_READY_FOR_DATA; // 2304
             break;
@@ -389,7 +390,7 @@ static void goldfish_mmc_do_command(struct goldfish_mmc_state *s, uint32_t cmd, 
                 arg /= s->block_length;
             }
             // arg is byte offset
-            result = goldfish_mmc_bdrv_write(s, arg, s->buffer_address, s->block_count);
+            goldfish_mmc_bdrv_write(s, arg, s->buffer_address, s->block_count);
 //            bdrv_flush(s->bs);
             new_status |= MMC_STAT_END_OF_DATA;
             s->resp[0] = SET_R1_CURRENT_STATE(4) | R1_READY_FOR_DATA; // 2304

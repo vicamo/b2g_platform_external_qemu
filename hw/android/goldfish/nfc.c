@@ -10,6 +10,7 @@
 ** GNU General Public License for more details.
 */
 
+#include "cpu.h"
 #include "android/utils/debug.h"
 #include "hw/nfc/nfc.h"
 #include "hw/nfc/hci.h"

@@ -282,7 +282,7 @@ static void switch_tss(int tss_selector,
     int tss_limit, tss_limit_max, type, old_tss_limit_max, old_type, v1, v2, i;
     target_ulong tss_base;
     uint32_t new_regs[8], new_segs[6];
-    uint32_t new_eflags, new_eip, new_cr3, new_ldt, new_trap;
+    uint32_t new_eflags, new_eip, new_cr3, new_ldt;
     uint32_t old_eflags, eflags_mask;
     SegmentCache *dt;
     int index;
@@ -336,7 +336,7 @@ static void switch_tss(int tss_selector,
         for(i = 0; i < 6; i++)
             new_segs[i] = lduw_kernel(tss_base + (0x48 + i * 4));
         new_ldt = lduw_kernel(tss_base + 0x60);
-        new_trap = ldl_kernel(tss_base + 0x64);
+        ldl_kernel(tss_base + 0x64);
     } else {
         /* 16 bit */
         new_cr3 = 0;
@@ -349,7 +349,6 @@ static void switch_tss(int tss_selector,
         new_ldt = lduw_kernel(tss_base + 0x2a);
         new_segs[R_FS] = 0;
         new_segs[R_GS] = 0;
-        new_trap = 0;
     }
 
     /* NOTE: we must avoid memory exceptions during the task switch,
@@ -1114,14 +1113,6 @@ void helper_sysret(int dflag)
         env->eflags |= IF_MASK;
         cpu_x86_set_cpl(env, 3);
     }
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        if (env->hflags & HF_LMA_MASK)
-            CC_OP = CC_OP_EFLAGS;
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 #endif
 
@@ -2509,12 +2500,6 @@ void helper_lcall_protected(int new_cs, target_ulong new_eip,
         SET_ESP(sp, sp_mask);
         EIP = offset;
     }
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 /* real and vm86 mode iret */
@@ -2795,24 +2780,11 @@ void helper_iret_protected(int shift, int next_eip)
         helper_ret_protected(shift, 1, 0);
     }
     env->hflags2 &= ~HF2_NMI_MASK;
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        CC_OP = CC_OP_EFLAGS;
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 void helper_lret_protected(int shift, int addend)
 {
     helper_ret_protected(shift, 0, addend);
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 void helper_sysenter(void)
@@ -2885,12 +2857,6 @@ void helper_sysexit(int dflag)
     }
     ESP = ECX;
     EIP = EDX;
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 #if defined(CONFIG_USER_ONLY)
@@ -3212,15 +3178,6 @@ void helper_rdmsr(void)
         break;
     case MSR_KERNELGSBASE:
         val = env->kernelgsbase;
-        break;
-#endif
-#ifdef CONFIG_KQEMU
-    case MSR_QPI_COMMBASE:
-        if (env->kqemu_enabled) {
-            val = kqemu_comm_base;
-        } else {
-            val = 0;
-        }
         break;
 #endif
     case MSR_MTRRphysBase(0):
@@ -4925,7 +4882,7 @@ static inline void svm_load_seg(hwaddr addr, SegmentCache *sc)
 }
 
 static inline void svm_load_seg_cache(hwaddr addr,
-                                      CPUState *env, int seg_reg)
+                                      CPUX86State *env, int seg_reg)
 {
     SegmentCache sc1, *sc = &sc1;
     svm_load_seg(addr, sc);
@@ -5444,15 +5401,13 @@ void helper_vmexit(uint32_t exit_code, uint64_t exit_info_1)
 void helper_enter_mmx(void)
 {
     env->fpstt = 0;
-    *(uint32_t *)(env->fptags) = 0;
-    *(uint32_t *)(env->fptags + 4) = 0;
+    memset(env->fptags, 0, sizeof(env->fptags));
 }
 
 void helper_emms(void)
 {
     /* set to empty state */
-    *(uint32_t *)(env->fptags) = 0x01010101;
-    *(uint32_t *)(env->fptags + 4) = 0x01010101;
+    memset(env->fptags, 1, sizeof(env->fptags));
 }
 
 /* XXX: suppress */

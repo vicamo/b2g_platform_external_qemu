@@ -66,7 +66,7 @@ static void android_arm_init_(ram_addr_t ram_size,
     const char *initrd_filename,
     const char *cpu_model)
 {
-    CPUState *env;
+    CPUARMState *env;
     qemu_irq *cpu_pic;
     qemu_irq *goldfish_pic;
     int i;
@@ -129,8 +129,7 @@ static void android_arm_init_(ram_addr_t ram_size,
 
     goldfish_memlog_init(0xff006000);
 
-    if (android_hw->hw_battery)
-        goldfish_battery_init();
+    goldfish_battery_init(android_hw->hw_battery);
 
     goldfish_rfkill_init();
 
@@ -143,22 +142,11 @@ static void android_arm_init_(ram_addr_t ram_size,
     goldfish_add_device_no_io(&nand_device);
     nand_dev_init(nand_device.base);
 #endif
-#ifdef CONFIG_TRACE
-    extern const char *trace_filename;
-    /* Init trace device if either tracing, or memory checking is enabled. */
-    if (trace_filename != NULL
 #ifdef CONFIG_MEMCHECK
-        || memcheck_enabled
-#endif  // CONFIG_MEMCHECK
-       ) {
+    if (memcheck_enabled) {
         trace_dev_init();
     }
-    if (trace_filename != NULL) {
-        D( "Trace file name is set to %s\n", trace_filename );
-    } else  {
-        D("Trace file name is not set\n");
-    }
-#endif
+#endif  // CONFIG_MEMCHECK
 
     pipe_dev_init();
 

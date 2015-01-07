@@ -17,6 +17,9 @@
 #define __STDC_FORMAT_MACROS 1
 #include <inttypes.h>  /* for PRId64 et al. */
 #include "android/utils/assert.h"
+#include "android/utils/compiler.h"
+
+ANDROID_BEGIN_HEADER
 
 /* internal helpers */
 void*  _android_array_alloc( size_t  itemSize, size_t  count );
@@ -106,19 +109,6 @@ extern char*  win32_strsep(char**  pline, const char*  delim);
 #  define  strcasecmp  stricmp
 #endif
 
-/** EINTR HANDLING
- **
- ** since QEMU uses SIGALRM pretty extensively, having a system call returning
- ** EINTR on Unix happens very frequently. provide a simple macro to guard against
- ** this.
- **/
-
-#ifdef _WIN32
-#  define   CHECKED(ret, call)    (ret) = (call)
-#else
-#  define   CHECKED(ret, call)    do { (ret) = (call); } while ((ret) < 0 && errno == EINTR)
-#endif
-
 /** SIGNAL HANDLING
  **
  ** the following can be used to block SIGALRM for a given period of time.
@@ -179,5 +169,7 @@ extern  void   sleep_ms( int  timeout );
 #endif
 
 /* */
+
+ANDROID_END_HEADER
 
 #endif /* _ANDROID_UTILS_SYSTEM_H */

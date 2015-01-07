@@ -12,6 +12,9 @@
 #ifndef GOLDFISH_DEVICE_H
 #define GOLDFISH_DEVICE_H
 
+#include "config.h"
+#include "exec/cpu-common.h"
+
 struct goldfish_device {
     struct goldfish_device *next;
     struct goldfish_device *prev;
@@ -43,7 +46,7 @@ void goldfish_timer_and_rtc_init(uint32_t timerbase, int timerirq);
 int goldfish_tty_add(CharDriverState *cs, int id, uint32_t base, int irq);
 void goldfish_fb_init(int id);
 void goldfish_audio_init(uint32_t base, int id, const char* input_source);
-void goldfish_battery_init();
+void goldfish_battery_init(int has_battery);
 void goldfish_battery_set_prop(int ac, int property, int value);
 void goldfish_battery_display(void (* callback)(void *data, const char* string), void *data);
 void goldfish_mmc_init(uint32_t base, int id, BlockDriverState* bs);

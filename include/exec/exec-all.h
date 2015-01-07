@@ -21,6 +21,8 @@
 #define _EXEC_ALL_H_
 
 #include "qemu-common.h"
+#include "exec/cpu-common.h"
+#include "exec/cpu-all.h"
 
 /* allow to see translation results - the slowdown should be negligible, so we leave it */
 #define DEBUG_DISAS
@@ -40,6 +42,7 @@ typedef ram_addr_t tb_page_addr_t;
 #define DISAS_UPDATE  2 /* cpu state was modified dynamically */
 #define DISAS_TB_JUMP 3 /* only pc was modified statically */
 
+struct TranslationBlock;
 typedef struct TranslationBlock TranslationBlock;
 
 /* XXX: make safe guess about sizes */
@@ -67,40 +70,46 @@ extern uint32_t gen_opc_hflags[OPC_BUF_SIZE];
 
 #include "qemu/log.h"
 
-void gen_intermediate_code(CPUState *env, struct TranslationBlock *tb);
-void gen_intermediate_code_pc(CPUState *env, struct TranslationBlock *tb);
-void restore_state_to_opc(CPUState *env, struct TranslationBlock *tb, int pc_pos);
+void gen_intermediate_code(CPUArchState *env, struct TranslationBlock *tb);
+void gen_intermediate_code_pc(CPUArchState *env, struct TranslationBlock *tb);
+void restore_state_to_opc(CPUArchState *env, struct TranslationBlock *tb,
+                          int pc_pos);
 
 unsigned long code_gen_max_block_size(void);
 void cpu_gen_init(void);
-int cpu_gen_code(CPUState *env, struct TranslationBlock *tb,
+int cpu_gen_code(CPUArchState *env, struct TranslationBlock *tb,
                  int *gen_code_size_ptr);
 int cpu_restore_state(struct TranslationBlock *tb,
-                      CPUState *env, unsigned long searched_pc);
-void cpu_resume_from_signal(CPUState *env1, void *puc);
-void cpu_io_recompile(CPUState *env, void *retaddr);
-TranslationBlock *tb_gen_code(CPUState *env,
+                      CPUArchState *env, unsigned long searched_pc);
+void QEMU_NORETURN cpu_resume_from_signal(CPUArchState *env1, void *puc);
+void QEMU_NORETURN cpu_io_recompile(CPUArchState *env, void *retaddr);
+TranslationBlock *tb_gen_code(CPUArchState *env, 
                               target_ulong pc, target_ulong cs_base, int flags,
                               int cflags);
-void cpu_exec_init(CPUState *env);
+void cpu_exec_init(CPUArchState *env);
 void QEMU_NORETURN cpu_loop_exit(void);
 int page_unprotect(target_ulong address, unsigned long pc, void *puc);
 void tb_invalidate_phys_page_range(hwaddr start, hwaddr end,
                                    int is_cpu_write_access);
 void tb_invalidate_page_range(target_ulong start, target_ulong end);
-void tlb_flush_page(CPUState *env, target_ulong addr);
-void tlb_flush(CPUState *env, int flush_global);
-int tlb_set_page_exec(CPUState *env, target_ulong vaddr,
+void tlb_flush_page(CPUArchState *env, target_ulong addr);
+void tlb_flush(CPUArchState *env, int flush_global);
+int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
                       hwaddr paddr, int prot,
                       int mmu_idx, int is_softmmu);
-static inline int tlb_set_page(CPUState *env1, target_ulong vaddr,
-                               hwaddr paddr, int prot,
-                               int mmu_idx, int is_softmmu)
-{
-    if (prot & PAGE_READ)
-        prot |= PAGE_EXEC;
-    return tlb_set_page_exec(env1, vaddr, paddr, prot, mmu_idx, is_softmmu);
-}
+int tlb_set_page(CPUArchState *env1, target_ulong vaddr,
+                 hwaddr paddr, int prot,
+                 int mmu_idx, int is_softmmu);
+
+typedef struct PhysPageDesc {
+    /* offset in host memory of the page + io_index in the low bits */
+    ram_addr_t phys_offset;
+    ram_addr_t region_offset;
+} PhysPageDesc;
+
+PhysPageDesc *phys_page_find(hwaddr index);
+
+int io_mem_watch;
 
 #define CODE_GEN_ALIGN           16 /* must be >= of the size of a icache line */
 
@@ -118,7 +127,10 @@ static inline int tlb_set_page(CPUState *env1, target_ulong vaddr,
 #define CODE_GEN_AVG_BLOCK_SIZE 64
 #endif
 
-#if defined(_ARCH_PPC) || defined(__x86_64__) || defined(__arm__) || defined(__i386__)
+#if defined(__arm__) || defined(_ARCH_PPC) \
+    || defined(__x86_64__) || defined(__i386__) \
+    || defined(__sparc__) || defined(__aarch64__) \
+    || defined(CONFIG_TCG_INTERPRETER)
 #define USE_DIRECT_JUMP
 #endif
 
@@ -154,10 +166,7 @@ struct TranslationBlock {
        jmp_first */
     struct TranslationBlock *jmp_next[2];
     struct TranslationBlock *jmp_first;
-#ifdef CONFIG_TRACE
-    struct BBRec *bb_rec;
-    uint64_t prev_time;
-#endif
+    uint32_t icount;
 
 #ifdef CONFIG_MEMCHECK
     /* Maps PCs in this translation block to corresponding PCs in guest address
@@ -170,8 +179,6 @@ struct TranslationBlock {
     /* Number of pairs (pc_tb, pc_guest) in tpc2gpc array. */
     unsigned int    tpc2gpc_pairs;
 #endif  // CONFIG_MEMCHECK
-
-    uint32_t icount;
 };
 
 static inline unsigned int tb_jmp_cache_hash_page(target_ulong pc)
@@ -250,7 +257,7 @@ tb_search_guest_pc_from_tb_pc(const TranslationBlock* tb, target_ulong tb_pc)
 
 TranslationBlock *tb_alloc(target_ulong pc);
 void tb_free(TranslationBlock *tb);
-void tb_flush(CPUState *env);
+void tb_flush(CPUArchState *env);
 void tb_link_phys(TranslationBlock *tb,
                   target_ulong phys_pc, target_ulong phys_page2);
 void tb_phys_invalidate(TranslationBlock *tb, target_ulong page_addr);
@@ -378,7 +385,7 @@ void tlb_fill(target_ulong addr, int is_write, int mmu_idx,
 #endif
 
 #if defined(CONFIG_USER_ONLY)
-static inline target_ulong get_phys_addr_code(CPUState *env1, target_ulong addr)
+static inline target_ulong get_phys_addr_code(CPUArchState *env1, target_ulong addr)
 {
     return addr;
 }
@@ -386,7 +393,7 @@ static inline target_ulong get_phys_addr_code(CPUState *env1, target_ulong addr)
 /* NOTE: this function can trigger an exception */
 /* NOTE2: the returned address is not exactly the physical address: it
    is the offset relative to phys_ram_base */
-static inline target_ulong get_phys_addr_code(CPUState *env1, target_ulong addr)
+static inline target_ulong get_phys_addr_code(CPUArchState *env1, target_ulong addr)
 {
     int mmu_idx, page_index, pd;
     void *p;
@@ -411,11 +418,25 @@ static inline target_ulong get_phys_addr_code(CPUState *env1, target_ulong addr)
 }
 #endif
 
-typedef void (CPUDebugExcpHandler)(CPUState *env);
+typedef void (CPUDebugExcpHandler)(CPUArchState *env);
 
 CPUDebugExcpHandler *cpu_set_debug_excp_handler(CPUDebugExcpHandler *handler);
 
 /* vl.c */
 extern int singlestep;
+
+/* Deterministic execution requires that IO only be performed on the last
+   instruction of a TB so that interrupts take effect immediately.  */
+static inline int can_do_io(CPUArchState *env)
+{
+    if (!use_icount)
+        return 1;
+
+    /* If not executing code then assume we are ok.  */
+    if (!env->current_tb)
+        return 1;
+
+    return env->can_do_io != 0;
+}
 
 #endif

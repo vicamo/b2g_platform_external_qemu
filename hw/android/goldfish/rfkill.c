@@ -10,6 +10,7 @@
 ** GNU General Public License for more details.
 */
 #include "migration/qemu-file.h"
+#include "cpu.h"
 #include "hw/android/goldfish/device.h"
 #include "android/utils/debug.h"
 
