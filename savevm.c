@@ -142,23 +142,25 @@ static void qemu_announce_self_once(void *opaque)
     }
     if (--count) {
         /* delay 50ms, 150ms, 250ms, ... */
-        qemu_mod_timer(timer, qemu_get_clock_ms(rt_clock) +
+        timer_mod(timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) +
                        50 + (SELF_ANNOUNCE_ROUNDS - count - 1) * 100);
     } else {
-	    qemu_del_timer(timer);
-	    qemu_free_timer(timer);
+	    timer_del(timer);
+	    timer_free(timer);
     }
 }
 
 void qemu_announce_self(void)
 {
 	static QEMUTimer *timer;
-	timer = qemu_new_timer_ms(rt_clock, qemu_announce_self_once, &timer);
+	timer = timer_new_ms(QEMU_CLOCK_REALTIME, qemu_announce_self_once, &timer);
 	qemu_announce_self_once(&timer);
 }
 
 /***********************************************************/
 /* savevm/loadvm support */
+
+void yield_until_fd_readable(int fd);
 
 #define IO_BUF_SIZE 32768
 #define MAX_IOV_SIZE MIN(IOV_MAX, 64)
@@ -549,7 +551,7 @@ QEMUFile *qemu_fopen(const char *filename, const char *mode)
     s->stdio_file = fopen(filename, mode);
     if (!s->stdio_file)
         goto fail;
-    
+
     if(mode[0] == 'w') {
         s->file = qemu_fopen_ops(s, &stdio_file_write_ops);
     } else {
@@ -1076,6 +1078,29 @@ uint64_t qemu_get_be64(QEMUFile *f)
     v = (uint64_t)qemu_get_be32(f) << 32;
     v |= qemu_get_be32(f);
     return v;
+}
+
+
+/* timer */
+
+void timer_put(QEMUFile *f, QEMUTimer *ts)
+{
+    uint64_t expire_time;
+
+    expire_time = timer_expire_time_ns(ts);
+    qemu_put_be64(f, expire_time);
+}
+
+void timer_get(QEMUFile *f, QEMUTimer *ts)
+{
+    uint64_t expire_time;
+
+    expire_time = qemu_get_be64(f);
+    if (expire_time != -1) {
+        timer_mod_ns(ts, expire_time);
+    } else {
+        timer_del(ts);
+    }
 }
 
 void  qemu_put_struct(QEMUFile*  f, const QField*  fields, const void*  s)
@@ -1660,7 +1685,7 @@ void do_savevm(Monitor *err, const char *name)
     sn->date_sec = tv.tv_sec;
     sn->date_nsec = tv.tv_usec * 1000;
 #endif
-    sn->vm_clock_nsec = qemu_get_clock_ns(vm_clock);
+    sn->vm_clock_nsec = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
 
     if (bdrv_get_info(bs, bdi) < 0 || bdi->vm_state_offset <= 0) {
         monitor_printf(err, "Device %s does not support VM state snapshots\n",
