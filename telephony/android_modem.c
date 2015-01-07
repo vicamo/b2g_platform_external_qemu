@@ -325,6 +325,9 @@ typedef struct _ADataNetRec {
 
 /* the spec says that there can only be a max of 4 contexts */
 #define  MAX_DATA_CONTEXTS  4
+
+static const char* amodem_teardown_pdp( ADataContext context );
+
 /* According to 3GPP 22.083 clause 2.2.1, 3GPP 22.084 clause 1.2.1 and 3GPP
  * 22.030 clause 6.5.5.6, the case of the maximum number is reached "when
  * there comes an incoming call while we have already one active(held)
@@ -653,8 +656,8 @@ amodem_reset( AModem  modem )
         modem->emergency_numbers[i] = amodem_nvram_get_str(modem,key_name, NULL);
     }
 
-    modem->area_code = -1;
-    modem->cell_id   = -1;
+    modem->area_code = 0;
+    modem->cell_id   = 0;
 
     strcpy( modem->operators[0].name[0], OPERATOR_HOME_NAME );
     strcpy( modem->operators[0].name[1], OPERATOR_HOME_NAME );
@@ -749,7 +752,7 @@ static void
 amodem_init_rmnets()
 {
     static int inited = 0;
-    int i, j;
+    int i, j, k;
 
     if ( inited ) {
         return;
@@ -773,9 +776,9 @@ amodem_init_rmnets()
         int ip = special_addr_ip + 100 + (net - _amodem_rmnets);
         net->addr.in.s_addr = htonl(ip);
         net->gw.in.s_addr = htonl(alias_addr_ip);
-        for ( i = 0; i < NUM_DNS_PER_RMNET && i < dns_addr_count; i++ ) {
-            ip = dns_addr[i];
-            net->dns[i].in.s_addr = htonl(ip);
+        for ( k = 0; k < NUM_DNS_PER_RMNET && k < dns_addr_count; k++ ) {
+            ip = dns_addr[k];
+            net->dns[k].in.s_addr = htonl(ip);
         }
 
         /* Data connections are down by default. */
@@ -902,7 +905,7 @@ amodem_set_voice_registration( AModem  modem, ARegistrationState  state )
             break;
 
         case A_REGISTRATION_UNSOL_ENABLED_FULL:
-            amodem_unsol( modem, "+CREG: %d,%d, \"%04x\", \"%07x\"\r",
+            amodem_unsol( modem, "+CREG: %d,%d,\"%04x\",\"%07x\"\r",
                           modem->voice_mode, modem->voice_state,
                           modem->area_code & 0xffff, modem->cell_id & 0xfffffff);
             break;
@@ -929,7 +932,7 @@ amodem_set_data_registration( AModem  modem, ARegistrationState  state )
         int nn;
         for (nn = 0; nn < MAX_DATA_CONTEXTS; nn++) {
             ADataContext  data = modem->data_contexts + nn;
-            data->active = 0;
+            amodem_teardown_pdp( data );
         }
         // Trigger an unsol data call list.
         amodem_unsol(modem, "+CGEV: ME DETACH\r");
@@ -1210,11 +1213,12 @@ amodem_send_calls_update( AModem  modem )
 
 
 int
-amodem_add_inbound_call( AModem  modem, const char*  number )
+amodem_add_inbound_call( AModem  modem, const char*  number, const int  numPresentation, const char*  name, const int  namePresentation )
 {
     AVoiceCall  vcall = amodem_alloc_call( modem );
     ACall       call  = &vcall->call;
     int         len;
+    char        cnapName[ A_CALL_NAME_MAX_SIZE+1 ];
 
     if (call == NULL)
         return -1;
@@ -1233,7 +1237,23 @@ amodem_add_inbound_call( AModem  modem, const char*  number )
     memcpy( call->number, number, len );
     call->number[len] = 0;
 
+    call->numberPresentation = numPresentation;
+
+    len = 0;
+    if (namePresentation == 0) {
+      len = strlen(name);
+      if (len >= sizeof(cnapName))
+          len = sizeof(cnapName)-1;
+      memcpy( cnapName, name, len );
+    }
+    cnapName[len] = 0;
+
     amodem_unsol( modem, "RING\r");
+    // Send unsolicited +CNAP with valid information.
+    if (strlen(cnapName) > 0
+        || (namePresentation > 0 && namePresentation <= 2)) {
+        amodem_unsol( modem, "+CNAP: \"%s\",%d\r", cnapName, namePresentation);
+    }
     return 0;
 }
 
@@ -2444,10 +2464,14 @@ handleListCurrentCalls( const char*  cmd, AModem  modem )
     for (nn = 0; nn < modem->call_count; nn++) {
         AVoiceCall  vcall = modem->calls + nn;
         ACall       call  = &vcall->call;
-        if (call->mode == A_CALL_VOICE)
-            amodem_add_line( modem, "+CLCC: %d,%d,%d,%d,%d,\"%s\",%d\r\n",
+        if (call->mode == A_CALL_VOICE) {
+            /* see TS 22.067 Table 1 for the definition of priority */
+            /* +CLCC: <ccid1>,<dir>,<stat>,<mode>,<mpty>,<number>,<type>,<alpha>,<priority>,<CLI validity> */
+            const char* number = (call->numberPresentation == 0) ? call->number : "";
+            amodem_add_line( modem, "+CLCC: %d,%d,%d,%d,%d,\"%s\",%d,\"\",2,%d\r\n",
                              call->id, call->dir, call->state, call->mode,
-                             call->multi, call->number, 129 );
+                             call->multi, number, 129 , call->numberPresentation);
+        }
     }
     return amodem_end_line( modem );
 }
@@ -3335,11 +3359,11 @@ static const struct {
     { "+CGDCONT?", NULL, handleQueryPDPContext },
     { "+CGCONTRDP=?", NULL, handleQueryPDPDynamicProp },
     { "!+CGCONTRDP", NULL, handleListPDPDynamicProp },
-    { "+CGQREQ=1", NULL, NULL },
-    { "+CGQMIN=1", NULL, NULL },
+    { "!+CGQREQ=", NULL, NULL },
+    { "!+CGQMIN=", NULL, NULL },
     { "+CGEREP=1,0", NULL, NULL },
     { "!+CGACT=", NULL, handleActivatePDPContext },
-    { "D*99***1#", NULL, handleStartPDPContext },
+    { "!D*99***", NULL, handleStartPDPContext },
 
     /* see requestDial() */
     { "!D", NULL, handleDial },  /* the code says that success/error is ignored, the call state will

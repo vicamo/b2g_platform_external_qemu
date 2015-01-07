@@ -20,11 +20,13 @@
 #include "hw/nfc/llcp-snep.h"
 #include "hw/nfc/re.h"
 #include "hw/nfc/snep.h"
+#include "hw/nfc/tag.h"
 
-struct nfc_re nfc_res[3] = {
-    INIT_NFC_RE([0], NCI_RF_PROTOCOL_NFC_DEP, NCI_RF_NFC_F_PASSIVE_LISTEN_MODE, "deadbeaf0", nfc_res+0),
-    INIT_NFC_RE([1], NCI_RF_PROTOCOL_NFC_DEP, NCI_RF_NFC_F_PASSIVE_LISTEN_MODE, "deadbeaf1", nfc_res+1),
-    INIT_NFC_RE([2], NCI_RF_PROTOCOL_T2T, NCI_RF_NFC_A_PASSIVE_LISTEN_MODE, "deadbeaf2", nfc_res+2)
+struct nfc_re nfc_res[4] = {
+    INIT_NFC_RE([0], NCI_RF_PROTOCOL_NFC_DEP, NCI_RF_NFC_F_PASSIVE_LISTEN_MODE, NULL, "deadbeaf0", nfc_res+0),
+    INIT_NFC_RE([1], NCI_RF_PROTOCOL_NFC_DEP, NCI_RF_NFC_F_PASSIVE_LISTEN_MODE, NULL, "deadbeaf1", nfc_res+1),
+    INIT_NFC_RE([2], NCI_RF_PROTOCOL_T1T, NCI_RF_NFC_A_PASSIVE_LISTEN_MODE, nfc_tags+0, "deadbeaf2", nfc_res+2),
+    INIT_NFC_RE([3], NCI_RF_PROTOCOL_T2T, NCI_RF_NFC_A_PASSIVE_LISTEN_MODE, nfc_tags+1, "deadbeaf3", nfc_res+3)
 };
 
 struct create_nci_dta_param {
@@ -599,6 +601,22 @@ nfc_re_process_data(struct nfc_re* re, const union nci_packet* dta,
                 len = nfc_create_nci_dta(rsp, NCI_PBF_END, re->connid, len);
             }
             break;
+        case NCI_RF_PROTOCOL_T1T:
+            len = process_t1t(re,
+                (const union command_packet*)dta->data.payload,
+                dta->data.l, &off, (union response_packet*)rsp->data.payload);
+            if (len) {
+                len = nfc_create_nci_dta(rsp, NCI_PBF_END, re->connid, len);
+            }
+            break;
+        case NCI_RF_PROTOCOL_T2T:
+            len = process_t2t(re,
+                (const union command_packet*)dta->data.payload,
+                dta->data.l, &off, (union response_packet*)rsp->data.payload);
+            if (len) {
+                len = nfc_create_nci_dta(rsp, NCI_PBF_END, re->connid, len);
+            }
+            break;
         default:
             assert(0); /* TODO: support other RF protocols */
             len = 0;
@@ -617,8 +635,91 @@ enum {
     NFC_DEP_PP_G = 0x02
 };
 
+static size_t
+create_activated_ntf_tech_nfca_poll(struct nfc_re* re, uint8_t* act)
+{
+    uint8_t* p;
+    enum nci_rf_protocol protocol;
+    size_t cid1_len;
+
+    assert(re);
+
+    p = act;
+    protocol = re->rfproto;
+    cid1_len = ARRAY_SIZE(re->nfcid1);
+
+    /* [NCI] Table54. */
+    /* [DIGITAL], Sec 4.6.3 SENS_RES */
+    if (cid1_len == 4) {
+        *p = SREN_RES_NFCID_4_BYTES;
+    } else if (cid1_len == 7) {
+        *p = SREN_RES_NFCID_7_BYTES;
+    } else if (cid1_len == 10) {
+        *p = SREN_RES_NFCID_10_BYTES;
+    } else {
+        assert(0);
+    }
+
+    if (protocol == NCI_RF_PROTOCOL_T1T) {
+        *p++ = *p | SREN_RES_BIT_FRAME_SDD_T1T;   /* Byte1 of SENS_RES */
+        *p++ = SREN_RES_T1T;                      /* Byte2 of SENS_RES */
+        *p++ = 0;                                 /* NFCID1 Length */
+        *p++ = 0;
+    } else {
+        *p++ = *p | SREN_RES_BIT_FRAME_SDD_OTHER_TAGS; /* Byte1 of SENS_RES */
+        *p++ = SREN_RES_OTHER_TAGS;                    /* Byte2 of SENS_RES */
+        *p++ = cid1_len;                               /* NFCID1 Length */
+        memcpy(p, re->nfcid1, cid1_len);               /* NFCID1 */
+        p += cid1_len;
+        *p++ = 1;                                      /* SEL_RES Response Length */
+        /* [DIGITAL], Sec 4.8.2 */
+        if (protocol == NCI_RF_PROTOCOL_T2T) {
+            *p++ = SEL_RES_T2T;
+        } else if (protocol == NCI_RF_PROTOCOL_NFC_DEP) {
+            *p++ = SEL_RES_NFC_NFC_DEP;
+        } else {
+            *p++ = SEL_RES_OTHER_TAGS;
+        }
+    }
+
+    return p-act;
+}
+
 size_t
-nfc_re_create_rf_intf_activated_ntf_act(struct nfc_re* re, uint8_t* act)
+nfc_re_create_rf_intf_activated_ntf_tech(enum nci_rf_tech_mode mode,
+                                         struct nfc_re* re, uint8_t* act)
+{
+    switch (mode) {
+        case NCI_RF_NFC_A_PASSIVE_POLL_MODE:
+            return create_activated_ntf_tech_nfca_poll(re, act);
+        default:
+            return 0;
+    }
+}
+
+/**
+ * [NCI], Table 61 says there are no Activation Parameters defined for
+ * the Frame RF Interface.
+ * But from libnfc-nci it seems proprietary parameters is required for
+ * t1t tag.
+ */
+static size_t
+create_activated_ntf_t1t(struct nfc_re* re, uint8_t* act)
+{
+    uint8_t* p;
+
+    assert(re);
+
+    p = act;
+
+    *p++ = T1T_HRO;
+    *p++ = T1T_HR1;
+
+    return p - act;
+}
+
+static size_t
+create_activated_ntf_nfc_dep(struct nfc_re* re, uint8_t* act)
 {
     uint8_t* p;
 
@@ -653,6 +754,21 @@ nfc_re_create_rf_intf_activated_ntf_act(struct nfc_re* re, uint8_t* act)
     act[0] = (p-act)-1;
 
     return p-act;
+}
+
+size_t
+nfc_re_create_rf_intf_activated_ntf_act(struct nfc_re* re, uint8_t* act)
+{
+    assert(re);
+
+    switch (re->rfproto) {
+        case NCI_RF_PROTOCOL_T1T:
+            return create_activated_ntf_t1t(re, act);
+        case NCI_RF_PROTOCOL_NFC_DEP:
+            return create_activated_ntf_nfc_dep(re, act);
+        default:
+            return 0;
+    }
 }
 
 size_t
