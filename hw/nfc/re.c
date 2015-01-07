@@ -84,7 +84,7 @@ send_pdu_from_re(ssize_t (*create)(void*, struct llcp_pdu*),
         goldfish_nfc_send_dta(create_nci_dta, &param);
         re->xmit_next = 0;
         if (re->xmit_timer) {
-            qemu_del_timer(re->xmit_timer);
+            timer_del(re->xmit_timer);
         }
     } else {
         /* we're waiting for the host to send a SYMM PDU, so
@@ -153,12 +153,14 @@ static void
 prepare_xmit_timer(struct nfc_re* re, void (*xmit_next_cb)(void*))
 {
     if (!re->xmit_timer) {
-        re->xmit_timer = qemu_new_timer_ms(vm_clock, xmit_next_cb, re);
+        re->xmit_timer =
+            timer_new(QEMU_CLOCK_VIRTUAL, SCALE_MS, xmit_next_cb, re);
         assert(re->xmit_timer);
     }
-    if (!qemu_timer_pending(re->xmit_timer)) {
+    if (!timer_pending(re->xmit_timer)) {
         /* xmit PDU in two seconds */
-        qemu_mod_timer(re->xmit_timer, qemu_get_clock_ms(vm_clock)+2000);
+        timer_mod(re->xmit_timer,
+            qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 2000);
     }
 }
 

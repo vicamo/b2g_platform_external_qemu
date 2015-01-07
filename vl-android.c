@@ -35,6 +35,7 @@
 #include "hw/i386/pc.h"
 #include "hw/audiodev.h"
 #include "hw/isa/isa.h"
+#include "hw/loader.h"
 #include "hw/baum.h"
 #include "hw/android/goldfish/nand.h"
 #include "net/net.h"
@@ -52,6 +53,7 @@
 #include "android/charpipe.h"
 #include "android/log-rotate.h"
 #include "modem_driver.h"
+#include "android/filesystems/ext4_utils.h"
 #include "android/gps.h"
 #include "android/hw-kmsg.h"
 #include "android/hw-pipe-net.h"
@@ -273,7 +275,6 @@ int cirrus_vga_enabled = 1;
 int std_vga_enabled = 0;
 int vmsvga_enabled = 0;
 int xenfb_enabled = 0;
-QEMUClock *rtc_clock;
 static int full_screen = 0;
 #ifdef CONFIG_SDL
 static int no_frame = 0;
@@ -1643,14 +1644,14 @@ static void gui_update(void *opaque)
             interval = dcl->gui_timer_interval;
         dcl = dcl->next;
     }
-    qemu_mod_timer(ds->gui_timer, interval + qemu_get_clock_ms(rt_clock));
+    timer_mod(ds->gui_timer, interval + qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
 }
 
 static void nographic_update(void *opaque)
 {
     uint64_t interval = GUI_REFRESH_INTERVAL;
 
-    qemu_mod_timer(nographic_timer, interval + qemu_get_clock_ms(rt_clock));
+    timer_mod(nographic_timer, interval + qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
 }
 
 struct vm_change_state_entry {
@@ -3268,6 +3269,10 @@ int main(int argc, char **argv, char **envp)
         }
     }
 
+    bool systemImageIsExt4 = false;
+    bool dataImageIsExt4 = false;
+    bool cacheImageIsExt4 = false;
+
     /* Initialize system partition image */
     {
         char        tmp[PATH_MAX+32];
@@ -3281,7 +3286,9 @@ int main(int argc, char **argv, char **envp)
 
         snprintf(tmp,sizeof(tmp),"system,size=0x%" PRIx64, sysBytes);
 
+        const char* imageFile = NULL;
         if (sysImage && *sysImage) {
+            imageFile = sysImage;
             if (filelock_create(sysImage) == NULL) {
                 fprintf(stderr,"WARNING: System image already in use, changes will not persist!\n");
                 /* If there is no file= parameters, nand_add_dev will create
@@ -3292,6 +3299,7 @@ int main(int argc, char **argv, char **envp)
             }
         }
         if (initImage && *initImage) {
+            imageFile = initImage;
             if (!path_exists(initImage)) {
                 PANIC("Invalid initial system image path: %s", initImage);
             }
@@ -3300,11 +3308,14 @@ int main(int argc, char **argv, char **envp)
         } else {
             PANIC("Missing initial system image path!");
         }
-        if (android_hw->hw_useext4) {
+        systemImageIsExt4 = imageFile && android_pathIsExt4PartitionImage(imageFile);
+        if (systemImageIsExt4) {
             /* Using a nand device to approximate a block device until full
              * support is added */
             pstrcat(tmp,sizeof(tmp),",pagesize=512,extrasize=0");
         }
+        VERBOSE_PRINT(init, "System partition format: %s",
+               systemImageIsExt4 ? "ext4" : "yaffs2");
         nand_add_dev(tmp);
     }
 
@@ -3321,6 +3332,7 @@ int main(int argc, char **argv, char **envp)
 
         snprintf(tmp,sizeof(tmp),"userdata,size=0x%" PRIx64, dataBytes);
 
+        const char* imageFile = dataImage;
         if (dataImage && *dataImage) {
             if (filelock_create(dataImage) == NULL) {
                 fprintf(stderr, "WARNING: Data partition already in use. Changes will not persist!\n");
@@ -3338,14 +3350,18 @@ int main(int argc, char **argv, char **envp)
             }
         }
         if (initImage && *initImage) {
+            imageFile = initImage;
             pstrcat(tmp, sizeof(tmp), ",initfile=");
             pstrcat(tmp, sizeof(tmp), initImage);
         }
-        if (android_hw->hw_useext4) {
+        dataImageIsExt4 = imageFile && android_pathIsExt4PartitionImage(imageFile);
+        if (dataImageIsExt4) {
             /* Using a nand device to approximate a block device until full
              * support is added */
             pstrcat(tmp, sizeof(tmp), ",pagesize=512,extrasize=0");
         }
+        VERBOSE_PRINT(init, "Data partition format: %s",
+               dataImageIsExt4 ? "ext4" : "yaffs2");
         nand_add_dev(tmp);
     }
 
@@ -3584,6 +3600,9 @@ int main(int argc, char **argv, char **envp)
 
         snprintf(tmp,sizeof(tmp),"cache,size=0x%" PRIx64, partSize);
 
+        // NOTE: Assume the /cache and /data partitions have the same format
+        cacheImageIsExt4 = dataImageIsExt4;
+
         if (partPath && *partPath && strcmp(partPath, "<temp>") != 0) {
             if (filelock_create(partPath) == NULL) {
                 fprintf(stderr, "WARNING: Cache partition already in use. Changes will not persist!\n");
@@ -3592,6 +3611,7 @@ int main(int argc, char **argv, char **envp)
             } else {
                 /* Create the file if needed */
                 if (!path_exists(partPath)) {
+                    // TODO(digit): For EXT4, create a real empty ext4 partition image.
                     if (path_empty_file(partPath) < 0) {
                         PANIC("Could not create cache image file %s: %s", partPath, strerror(errno));
                     }
@@ -3600,11 +3620,13 @@ int main(int argc, char **argv, char **envp)
                 pstrcat(tmp, sizeof(tmp), partPath);
             }
         }
-        if (android_hw->hw_useext4) {
+        if (cacheImageIsExt4) {
             /* Using a nand device to approximate a block device until full
              * support is added */
             pstrcat(tmp, sizeof(tmp), ",pagesize=512,extrasize=0");
         }
+        VERBOSE_PRINT(init, "Cache partition format: %s",
+               cacheImageIsExt4 ? "ext4" : "yaffs2");
         nand_add_dev(tmp);
     }
 
@@ -3677,7 +3699,7 @@ int main(int argc, char **argv, char **envp)
         }
         qemu_set_log(mask);
     }
-  
+
 #if defined(CONFIG_KVM)
     if (kvm_allowed < 0) {
         kvm_allowed = kvm_check_allowed();
@@ -4201,15 +4223,15 @@ int main(int argc, char **argv, char **envp)
     dcl = ds->listeners;
     while (dcl != NULL) {
         if (dcl->dpy_refresh != NULL) {
-            ds->gui_timer = qemu_new_timer_ms(rt_clock, gui_update, ds);
-            qemu_mod_timer(ds->gui_timer, qemu_get_clock_ms(rt_clock));
+            ds->gui_timer = timer_new(QEMU_CLOCK_REALTIME, SCALE_MS, gui_update, ds);
+            timer_mod(ds->gui_timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
         }
         dcl = dcl->next;
     }
 
     if (display_type == DT_NOGRAPHIC || display_type == DT_VNC) {
-        nographic_timer = qemu_new_timer_ms(rt_clock, nographic_update, NULL);
-        qemu_mod_timer(nographic_timer, qemu_get_clock_ms(rt_clock));
+        nographic_timer = timer_new(QEMU_CLOCK_REALTIME, SCALE_MS, nographic_update, NULL);
+        timer_mod(nographic_timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
     }
 
     text_consoles_set_display(ds);
