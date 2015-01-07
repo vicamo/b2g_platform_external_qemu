@@ -85,6 +85,16 @@ static const char kHostOs[] = "windows";
 // The target CPU architecture.
 const char kTargetArch[] = "aarch64";
 
+String getNthParentDir(const char* path, size_t n) {
+    StringVector dir = PathUtils::decompose(path);
+    PathUtils::simplifyComponents(&dir);
+    if (dir.size() < n + 1U) {
+        return String("");
+    }
+    dir.resize(dir.size() - n);
+    return PathUtils::recompose(dir);
+}
+
 // Return the path of the QEMU executable
 String getQemuExecutablePath(const char* programPath) {
     StringVector path = PathUtils::decompose(programPath);
@@ -299,17 +309,26 @@ extern "C" int main(int argc, char **argv, char **envp) {
         hw->kernel_path = kernelFile;
     }
 
-    KernelType kernelType = KERNEL_TYPE_LEGACY;
-    if (!android_pathProbeKernelType(hw->kernel_path, &kernelType)) {
-        D("WARNING: Could not determine kernel device naming scheme. Assuming legacy\n"
-            "If this AVD doesn't boot, and uses a recent kernel (3.10 or above) try setting\n"
-            "'kernel.newDeviceNaming' to 'yes' in its configuration.\n");
+    char versionString[256];
+    if (!android_pathProbeKernelVersionString(hw->kernel_path,
+                                              versionString,
+                                              sizeof(versionString))) {
+        derror("Can't find 'Linux version ' string in kernel image file: %s",
+               hw->kernel_path);
+        exit(2);
+    }
+
+    KernelVersion kernelVersion;
+    if (!android_parseLinuxVersionString(versionString, &kernelVersion)) {
+        derror("Can't parse 'Linux version ' string in kernel image file: '%s'",
+               versionString);
+        exit(2);
     }
 
     // Auto-detect kernel device naming scheme if needed.
     if (androidHwConfig_getKernelDeviceNaming(hw) < 0) {
         const char* newDeviceNaming = "no";
-        if (kernelType == KERNEL_TYPE_3_10_OR_ABOVE) {
+        if (kernelVersion >= KERNEL_VERSION_3_10_0) {
             D("Auto-detect: Kernel image requires new device naming scheme.");
             newDeviceNaming = "yes";
         } else {
@@ -693,6 +712,23 @@ extern "C" int main(int argc, char **argv, char **envp) {
     String qemuExecutable = getQemuExecutablePath(argv[0]);
     D("QEMU EXECUTABLE=%s\n", qemuExecutable.c_str());
 
+    // Create userdata file from init version if needed.
+    if (!path_exists(hw->disk_dataPartition_path)) {
+        if (!path_exists(hw->disk_dataPartition_initPath)) {
+            derror("Missing initial data partition file: %s",
+                   hw->disk_dataPartition_initPath);
+            exit(1);
+        }
+        D("Creating: %s\n", hw->disk_dataPartition_path);
+
+        if (path_copy_file(hw->disk_dataPartition_path,
+                           hw->disk_dataPartition_initPath) < 0) {
+            derror("Could not create %s: %s", hw->disk_dataPartition_path,
+                   strerror(errno));
+            exit(1);
+        }
+    }
+
     // Now build the QEMU parameters.
     const char* args[128];
     int n = 0;
@@ -759,6 +795,12 @@ extern "C" int main(int argc, char **argv, char **envp) {
     args[n++] = "-device";
     args[n++] = "virtio-net-device,netdev=mynet";
     args[n++] = "-show-cursor";
+
+    // Data directory (for keymaps and PC Bios).
+    args[n++] = "-L";
+    String dataDir = getNthParentDir(qemuExecutable.c_str(), 2U);
+    dataDir += "/pc-bios";
+    args[n++] = dataDir.c_str();
 
     if(VERBOSE_CHECK(init)) {
         int i;
