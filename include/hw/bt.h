@@ -204,11 +204,6 @@ enum bt_l2cap_psm_predef {
 /* bt-sdp.c */
 void bt_l2cap_sdp_init(struct bt_l2cap_device_s *dev);
 
-/* bt-hid.c */
-struct bt_device_s *bt_mouse_init(struct bt_scatternet_s *net);
-struct bt_device_s *bt_tablet_init(struct bt_scatternet_s *net);
-struct bt_device_s *bt_keyboard_init(struct bt_scatternet_s *net);
-
 /* bt-remote.c */
 struct bt_remote_device_s {
     struct bt_l2cap_device_s l2cap_dev;

@@ -20,7 +20,6 @@
 
 #include "qemu-common.h"
 #include "qemu/timer.h"
-#include "hw/usb.h"
 #include "net/net.h"
 #include "hw/bt.h"
 

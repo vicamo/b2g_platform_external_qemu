@@ -30,13 +30,10 @@
 #include "qemu-common.h"
 #include "hw/hw.h"
 #include "hw/boards.h"
-#include "hw/usb.h"
-#include "hw/pcmcia.h"
 #include "hw/i386/pc.h"
 #include "hw/audiodev.h"
 #include "hw/isa/isa.h"
 #include "hw/loader.h"
-#include "hw/baum.h"
 #include "hw/android/goldfish/nand.h"
 #include "net/net.h"
 #include "ui/console.h"
@@ -180,11 +177,8 @@ int qemu_main(int argc, char **argv, char **envp);
 
 #include "hw/hw.h"
 #include "hw/boards.h"
-#include "hw/usb.h"
-#include "hw/pcmcia.h"
 #include "hw/i386/pc.h"
 #include "hw/isa/isa.h"
-#include "hw/baum.h"
 #include "hw/bt.h"
 #include "sysemu/watchdog.h"
 #include "hw/i386/smbios.h"
@@ -716,9 +710,6 @@ static struct bt_device_s *bt_device_add(const char *opt)
     if (!vlan->slave)
         fprintf(stderr, "qemu: warning: adding a slave device to "
                         "an empty scatternet %i\n", vlan_id);
-
-    if (!strcmp(devname, "keyboard"))
-        return bt_keyboard_init(vlan);
 
     fprintf(stderr, "qemu: unsupported bluetooth device `%s'\n", devname);
     return 0;
@@ -1331,49 +1322,6 @@ static void numa_add(const char *optarg)
         nb_numa_nodes++;
     }
     return;
-}
-
-/***********************************************************/
-/* PCMCIA/Cardbus */
-
-static struct pcmcia_socket_entry_s {
-    PCMCIASocket *socket;
-    struct pcmcia_socket_entry_s *next;
-} *pcmcia_sockets = 0;
-
-void pcmcia_socket_register(PCMCIASocket *socket)
-{
-    struct pcmcia_socket_entry_s *entry;
-
-    entry = g_malloc(sizeof(struct pcmcia_socket_entry_s));
-    entry->socket = socket;
-    entry->next = pcmcia_sockets;
-    pcmcia_sockets = entry;
-}
-
-void pcmcia_socket_unregister(PCMCIASocket *socket)
-{
-    struct pcmcia_socket_entry_s *entry, **ptr;
-
-    ptr = &pcmcia_sockets;
-    for (entry = *ptr; entry; ptr = &entry->next, entry = *ptr)
-        if (entry->socket == socket) {
-            *ptr = entry->next;
-            g_free(entry);
-        }
-}
-
-void pcmcia_info(Monitor *mon)
-{
-    struct pcmcia_socket_entry_s *iter;
-
-    if (!pcmcia_sockets)
-        monitor_printf(mon, "No PCMCIA sockets\n");
-
-    for (iter = pcmcia_sockets; iter; iter = iter->next)
-        monitor_printf(mon, "%s: %s\n", iter->socket->slot_string,
-                       iter->socket->attached ? iter->socket->card_string :
-                       "Empty");
 }
 
 /***********************************************************/
