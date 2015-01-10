@@ -24,6 +24,7 @@ OPTION_OUT_DIR=
 OPTION_HELP=no
 OPTION_STATIC=no
 OPTION_MINGW=no
+OPTION_MULTISIM=1
 
 GLES_DIR=
 GLES_SUPPORT=no
@@ -79,6 +80,8 @@ for opt do
   --no-tests)
   # Ignore this option, only used by android-rebuild.sh
   ;;
+  --multisim=*) OPTION_MULTISIM=$optarg
+  ;;
   *)
     echo "unknown option '$opt', use --help"
     exit 1
@@ -112,6 +115,7 @@ EOF
     echo "  --no-gles                   Disable GLES emulation support"
     echo "  --no-pcbios                 Disable copying of PC Bios files"
     echo "  --no-tests                  Don't run unit test suite"
+    echo "  --multisim                  the number of modem devices, default 1, max 9."
     echo ""
     exit 1
 fi
@@ -748,6 +752,8 @@ case "$TARGET_OS" in
 esac
 
 echo "#define CONFIG_ANDROID       1" >> $config_h
+
+echo "#define MAX_GSM_DEVICES  $OPTION_MULTISIM" >> $config_h
 
 log "Generate   : $config_h"
 
