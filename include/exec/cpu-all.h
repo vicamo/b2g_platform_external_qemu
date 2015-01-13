@@ -20,6 +20,7 @@
 #define CPU_ALL_H
 
 #include "qemu-common.h"
+#include "qemu/thread.h"
 #include "exec/cpu-common.h"
 
 /* some important defines:
@@ -321,6 +322,9 @@ extern unsigned long reserved_va;
 #define TARGET_PAGE_SIZE (1 << TARGET_PAGE_BITS)
 #define TARGET_PAGE_MASK ~(TARGET_PAGE_SIZE - 1)
 #define TARGET_PAGE_ALIGN(addr) (((addr) + TARGET_PAGE_SIZE - 1) & TARGET_PAGE_MASK)
+#ifdef TARGET_X86_64
+#define TARGET_PTE_MASK 0x7fffffffffff
+#endif
 
 /* ??? These should be the larger of uintptr_t and target_ulong.  */
 extern uintptr_t qemu_real_host_page_size;
@@ -479,15 +483,19 @@ typedef struct RAMBlock {
     ram_addr_t length;
     uint32_t flags;
     char idstr[256];
-    QLIST_ENTRY(RAMBlock) next;
-#if defined(__linux__) && !defined(TARGET_S390X)
+    /* Reads can take either the iothread or the ramlist lock.
+     * Writes must take both locks.
+     */
+    QTAILQ_ENTRY(RAMBlock) next;
     int fd;
-#endif
 } RAMBlock;
 
 typedef struct RAMList {
+    QemuMutex mutex;
     uint8_t *phys_dirty;
-    QLIST_HEAD(ram, RAMBlock) blocks;
+    RAMBlock *mru_block;
+    QTAILQ_HEAD(ram, RAMBlock) blocks;
+    uint32_t version;
 } RAMList;
 extern RAMList ram_list;
 

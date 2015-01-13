@@ -829,8 +829,8 @@ static void smc91c111_init1(SysBusDevice *dev)
     s->vc->link_status_changed = smc91c111_link_status_changed;
     qemu_format_nic_info_str(s->vc, s->macaddr);
 
-    register_savevm( "smc91c111", 0, SMC91C111_SAVE_VERSION,
-                     smc91c111_save, smc91c111_load, s);
+    register_savevm(NULL, "smc91c111", 0, SMC91C111_SAVE_VERSION,
+                    smc91c111_save, smc91c111_load, s);
 }
 
 static void smc91c111_register_devices(void)

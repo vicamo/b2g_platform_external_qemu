@@ -823,9 +823,13 @@ amodem_create( int  base_port, int instance_id, AModemUnsolFunc  unsol_func, voi
     // We don't know the exact number of instances to create here, it's
     // controlled by modem_driver_init(). Putting -1 here and register_savevm()
     // will assign a correct SaveStateEntry instance_id for us.
-    register_savevm( "android_modem", -1, MODEM_DEV_STATE_SAVE_VERSION,
-                      android_modem_state_save,
-                      android_modem_state_load, modem);
+    register_savevm(NULL,
+                    "android_modem",
+                    -1,
+                    MODEM_DEV_STATE_SAVE_VERSION,
+                    android_modem_state_save,
+                    android_modem_state_load,
+                    modem);
 
     aconfig_save_file( modem->nvram_config, modem->nvram_config_filename );
     return  modem;

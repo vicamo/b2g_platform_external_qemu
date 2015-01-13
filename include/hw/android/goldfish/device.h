@@ -54,6 +54,7 @@ void *goldfish_switch_add(char *name, uint32_t (*writefn)(void *opaque, uint32_t
 void goldfish_switch_set_state(void *opaque, uint32_t state);
 void goldfish_rfkill_init();
 void goldfish_nfc_init();
+int goldfish_guest_is_64bit();
 
 // these do not add a device
 void trace_dev_init();
@@ -75,5 +76,15 @@ void nand_dev_init(uint32_t base);
 /* Maximum IRQ number available for a device on ARM. */
 #define GFD_MAX_IRQ     32
 #endif
+
+static inline void uint64_set_low(uint64_t *addr, uint32 value)
+{
+    *addr = (*addr & ~(0xFFFFFFFFULL)) | value;
+}
+
+static inline void uint64_set_high(uint64_t *addr, uint32 value)
+{
+    *addr = (*addr & 0xFFFFFFFFULL) | ((uint64_t)value << 32);
+}
 
 #endif  /* GOLDFISH_DEVICE_H */

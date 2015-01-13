@@ -29,6 +29,8 @@ GLES_LIBS=
 GLES_SUPPORT=no
 GLES_PROBE=yes
 
+PCBIOS_PROBE=yes
+
 HOST_CC=${CC:-gcc}
 OPTION_CC=
 
@@ -67,6 +69,8 @@ for opt do
   ;;
   --no-gles) GLES_PROBE=no
   ;;
+  --no-pcbios) PCBIOS_PROBE=no
+  ;;
   --multisim=*) OPTION_MULTISIM=$optarg
   ;;
   *)
@@ -96,9 +100,9 @@ EOF
     echo "  --static                 build a completely static executable"
     echo "  --verbose                verbose configuration"
     echo "  --debug                  build debug version of the emulator"
-    echo "  --gles-include=PATH      specify path to GLES emulation headers"
     echo "  --gles-libs=PATH         specify path to GLES emulation host libraries"
     echo "  --no-gles                disable GLES emulation support"
+    echo "  --no-pcbios              disable copying of PC Bios files"
     echo "  --multisim               the number of modem devices, default 1, max 9."
     echo ""
     exit 1
@@ -276,6 +280,24 @@ if [ "$GLES_SUPPORT" = "yes" ]; then
             log "GLES       : Copying $GLES_LIB"
         fi
     done
+fi
+
+if [ "$PCBIOS_PROBE" = "yes" ]; then
+    PCBIOS_DIR=$(dirname "$0")/../../prebuilts/qemu-kernel/x86/pc-bios
+    if [ ! -d "$PCBIOS_DIR" ]; then
+        log2 "PC Bios    : Probing $PCBIOS_DIR (missing)"
+        PCBIOS_DIR=../pc-bios
+    fi
+    log2 "PC Bios    : Probing $PCBIOS_DIR"
+    if [ ! -d "$PCBIOS_DIR" ]; then
+        log "PC Bios    : Could not find prebuilts directory."
+    else
+        mkdir -p objs/lib/pc-bios
+        for BIOS_FILE in bios.bin vgabios-cirrus.bin; do
+            log "PC Bios    : Copying $BIOS_FILE"
+            cp -f $PCBIOS_DIR/$BIOS_FILE objs/lib/pc-bios/$BIOS_FILE
+        done
+    fi
 fi
 
 # For OS X, detect the location of the SDK to use.
@@ -516,9 +538,15 @@ feature_check_header HAVE_FNMATCH_H       "<fnmatch.h>"
 case $TARGET_OS in
     windows)
         TARGET_EXEEXT=.exe
+        TARGET_DLLEXT=.dll
+        ;;
+    darwin)
+        TARGET_EXEXT=
+        TARGET_DLLEXT=.dylib
         ;;
     *)
         TARGET_EXEEXT=
+        TARGET_DLLEXT=.so
         ;;
 esac
 
@@ -538,6 +566,7 @@ create_config_mk
 echo "" >> $config_mk
 echo "HOST_PREBUILT_TAG := $TARGET_OS" >> $config_mk
 echo "HOST_EXEEXT       := $TARGET_EXEEXT" >> $config_mk
+echo "HOST_DLLEXT       := $TARGET_DLLEXT" >> $config_mk
 echo "PREBUILT          := $ANDROID_PREBUILT" >> $config_mk
 echo "PREBUILTS         := $ANDROID_PREBUILTS" >> $config_mk
 
