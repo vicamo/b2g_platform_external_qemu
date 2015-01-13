@@ -609,14 +609,22 @@ static inline void gen_store_fpr32 (TCGv_i32 t, int reg)
     tcg_gen_st_i32(t, cpu_env, offsetof(CPUMIPSState, active_fpu.fpr[reg].w[FP_ENDIAN_IDX]));
 }
 
-static inline void gen_load_fpr32h (TCGv_i32 t, int reg)
+static inline void gen_load_fpr32h (DisasContext *ctx, TCGv_i32 t, int reg)
 {
+  if (ctx->hflags & MIPS_HFLAG_F64) {
     tcg_gen_ld_i32(t, cpu_env, offsetof(CPUMIPSState, active_fpu.fpr[reg].w[!FP_ENDIAN_IDX]));
+  } else {
+    gen_load_fpr32(t, reg|1);
+  }
 }
 
-static inline void gen_store_fpr32h (TCGv_i32 t, int reg)
+static inline void gen_store_fpr32h (DisasContext *ctx, TCGv_i32 t, int reg)
 {
+  if (ctx->hflags & MIPS_HFLAG_F64) {
     tcg_gen_st_i32(t, cpu_env, offsetof(CPUMIPSState, active_fpu.fpr[reg].w[!FP_ENDIAN_IDX]));
+  } else {
+    gen_store_fpr32(t, reg|1);
+  }
 }
 
 static inline void gen_load_fpr64 (DisasContext *ctx, TCGv_i64 t, int reg)
@@ -1129,13 +1137,14 @@ static void gen_ldst (DisasContext *ctx, uint32_t opc, int rt,
         opn = "lbu";
         break;
     case OPC_LWL:
+        t1 = tcg_temp_new();
         tcg_gen_andi_tl(t1, t0, 3);
 #ifndef TARGET_WORDS_BIGENDIAN
         tcg_gen_xori_tl(t1, t1, 3);
 #endif
         tcg_gen_shli_tl(t1, t1, 3);
         tcg_gen_andi_tl(t0, t0, ~3);
-        tcg_gen_qemu_ld32u(t0, t0, ctx->mem_idx);
+        tcg_gen_qemu_ld_tl(t0, t0, ctx->mem_idx, MO_TEUL);
         tcg_gen_shl_tl(t0, t0, t1);
         tcg_gen_xori_tl(t1, t1, 31);
         t2 = tcg_const_tl(0x7fffffffull);
@@ -1144,6 +1153,7 @@ static void gen_ldst (DisasContext *ctx, uint32_t opc, int rt,
         tcg_gen_and_tl(t1, t1, t2);
         tcg_temp_free(t2);
         tcg_gen_or_tl(t0, t0, t1);
+        tcg_temp_free(t1);
         tcg_gen_ext32s_tl(t0, t0);
         gen_store_gpr(t0, rt);
         opn = "lwl";
@@ -1155,13 +1165,14 @@ static void gen_ldst (DisasContext *ctx, uint32_t opc, int rt,
         opn = "swl";
         break;
     case OPC_LWR:
+        t1 = tcg_temp_new();
         tcg_gen_andi_tl(t1, t0, 3);
 #ifdef TARGET_WORDS_BIGENDIAN
         tcg_gen_xori_tl(t1, t1, 3);
 #endif
         tcg_gen_shli_tl(t1, t1, 3);
         tcg_gen_andi_tl(t0, t0, ~3);
-        tcg_gen_qemu_ld32u(t0, t0, ctx->mem_idx);
+        tcg_gen_qemu_ld_tl(t0, t0, ctx->mem_idx, MO_TEUL);
         tcg_gen_shr_tl(t0, t0, t1);
         tcg_gen_xori_tl(t1, t1, 31);
         t2 = tcg_const_tl(0xfffffffeull);
@@ -1170,6 +1181,8 @@ static void gen_ldst (DisasContext *ctx, uint32_t opc, int rt,
         tcg_gen_and_tl(t1, t1, t2);
         tcg_temp_free(t2);
         tcg_gen_or_tl(t0, t0, t1);
+        tcg_temp_free(t1);
+        tcg_gen_ext32s_tl(t0, t0);
         gen_store_gpr(t0, rt);
         opn = "lwr";
         break;
@@ -5416,7 +5429,7 @@ static void gen_mftr(CPUMIPSState *env, DisasContext *ctx, int rt, int rd,
         } else {
             TCGv_i32 fp0 = tcg_temp_new_i32();
 
-            gen_load_fpr32h(fp0, rt);
+            gen_load_fpr32h(ctx, fp0, rt);
             tcg_gen_ext_i32_tl(t0, fp0);
             tcg_temp_free_i32(fp0);
         }
@@ -5582,7 +5595,7 @@ static void gen_mttr(CPUMIPSState *env, DisasContext *ctx, int rd, int rt,
             TCGv_i32 fp0 = tcg_temp_new_i32();
 
             tcg_gen_trunc_tl_i32(fp0, t0);
-            gen_store_fpr32h(fp0, rd);
+            gen_store_fpr32h(ctx, fp0, rd);
             tcg_temp_free_i32(fp0);
         }
         break;
@@ -5902,7 +5915,7 @@ static void gen_cp1 (DisasContext *ctx, uint32_t opc, int rt, int fs)
         {
             TCGv_i32 fp0 = tcg_temp_new_i32();
 
-            gen_load_fpr32h(fp0, fs);
+            gen_load_fpr32h(ctx, fp0, fs);
             tcg_gen_ext_i32_tl(t0, fp0);
             tcg_temp_free_i32(fp0);
         }
@@ -5915,7 +5928,7 @@ static void gen_cp1 (DisasContext *ctx, uint32_t opc, int rt, int fs)
             TCGv_i32 fp0 = tcg_temp_new_i32();
 
             tcg_gen_trunc_tl_i32(fp0, t0);
-            gen_store_fpr32h(fp0, fs);
+            gen_store_fpr32h(ctx, fp0, fs);
             tcg_temp_free_i32(fp0);
         }
         opn = "mthc1";
@@ -6001,7 +6014,7 @@ static inline void gen_movcf_d (DisasContext *ctx, int fs, int fd, int cc, int t
     gen_set_label(l1);
 }
 
-static inline void gen_movcf_ps (int fs, int fd, int cc, int tf)
+static inline void gen_movcf_ps (DisasContext *ctx, int fs, int fd, int cc, int tf)
 {
     int cond;
     TCGv_i32 t0 = tcg_temp_new_i32();
@@ -6021,8 +6034,8 @@ static inline void gen_movcf_ps (int fs, int fd, int cc, int tf)
 
     tcg_gen_andi_i32(t0, fpu_fcr31, 1 << get_fp_bit(cc+1));
     tcg_gen_brcondi_i32(cond, t0, 0, l2);
-    gen_load_fpr32h(t0, fs);
-    gen_store_fpr32h(t0, fd);
+    gen_load_fpr32h(ctx, t0, fs);
+    gen_store_fpr32h(ctx, t0, fd);
     tcg_temp_free_i32(t0);
     gen_set_label(l2);
 }
@@ -7029,7 +7042,7 @@ static void gen_farith (DisasContext *ctx, uint32_t op1,
         break;
     case FOP(17, 22):
         check_cp1_64bitmode(ctx);
-        gen_movcf_ps(fs, fd, (ft >> 2) & 0x7, ft & 0x1);
+        gen_movcf_ps(ctx, fs, fd, (ft >> 2) & 0x7, ft & 0x1);
         opn = "movcf.ps";
         break;
     case FOP(18, 22):
@@ -7154,7 +7167,7 @@ static void gen_farith (DisasContext *ctx, uint32_t op1,
         {
             TCGv_i32 fp0 = tcg_temp_new_i32();
 
-            gen_load_fpr32h(fp0, fs);
+            gen_load_fpr32h(ctx, fp0, fs);
             gen_helper_float_cvts_pu(fp0, cpu_env, fp0);
             gen_store_fpr32(fp0, fd);
             tcg_temp_free_i32(fp0);
@@ -7193,7 +7206,7 @@ static void gen_farith (DisasContext *ctx, uint32_t op1,
 
             gen_load_fpr32(fp0, fs);
             gen_load_fpr32(fp1, ft);
-            gen_store_fpr32h(fp0, fd);
+            gen_store_fpr32h(ctx, fp0, fd);
             gen_store_fpr32(fp1, fd);
             tcg_temp_free_i32(fp0);
             tcg_temp_free_i32(fp1);
@@ -7207,9 +7220,9 @@ static void gen_farith (DisasContext *ctx, uint32_t op1,
             TCGv_i32 fp1 = tcg_temp_new_i32();
 
             gen_load_fpr32(fp0, fs);
-            gen_load_fpr32h(fp1, ft);
+            gen_load_fpr32h(ctx, fp1, ft);
             gen_store_fpr32(fp1, fd);
-            gen_store_fpr32h(fp0, fd);
+            gen_store_fpr32h(ctx, fp0, fd);
             tcg_temp_free_i32(fp0);
             tcg_temp_free_i32(fp1);
         }
@@ -7221,10 +7234,10 @@ static void gen_farith (DisasContext *ctx, uint32_t op1,
             TCGv_i32 fp0 = tcg_temp_new_i32();
             TCGv_i32 fp1 = tcg_temp_new_i32();
 
-            gen_load_fpr32h(fp0, fs);
+            gen_load_fpr32h(ctx, fp0, fs);
             gen_load_fpr32(fp1, ft);
             gen_store_fpr32(fp1, fd);
-            gen_store_fpr32h(fp0, fd);
+            gen_store_fpr32h(ctx, fp0, fd);
             tcg_temp_free_i32(fp0);
             tcg_temp_free_i32(fp1);
         }
@@ -7236,10 +7249,10 @@ static void gen_farith (DisasContext *ctx, uint32_t op1,
             TCGv_i32 fp0 = tcg_temp_new_i32();
             TCGv_i32 fp1 = tcg_temp_new_i32();
 
-            gen_load_fpr32h(fp0, fs);
-            gen_load_fpr32h(fp1, ft);
+            gen_load_fpr32h(ctx, fp0, fs);
+            gen_load_fpr32h(ctx, fp1, ft);
             gen_store_fpr32(fp1, fd);
-            gen_store_fpr32h(fp0, fd);
+            gen_store_fpr32h(ctx, fp0, fd);
             tcg_temp_free_i32(fp0);
             tcg_temp_free_i32(fp1);
         }
@@ -7420,23 +7433,23 @@ static void gen_flt3_arith (DisasContext *ctx, uint32_t opc,
 
             tcg_gen_brcondi_tl(TCG_COND_NE, t0, 0, l1);
             gen_load_fpr32(fp, fs);
-            gen_load_fpr32h(fph, fs);
+            gen_load_fpr32h(ctx, fph, fs);
             gen_store_fpr32(fp, fd);
-            gen_store_fpr32h(fph, fd);
+            gen_store_fpr32h(ctx, fph, fd);
             tcg_gen_br(l2);
             gen_set_label(l1);
             tcg_gen_brcondi_tl(TCG_COND_NE, t0, 4, l2);
             tcg_temp_free(t0);
 #ifdef TARGET_WORDS_BIGENDIAN
             gen_load_fpr32(fp, fs);
-            gen_load_fpr32h(fph, ft);
-            gen_store_fpr32h(fp, fd);
+            gen_load_fpr32h(ctx, fph, ft);
+            gen_store_fpr32h(ctx, fp, fd);
             gen_store_fpr32(fph, fd);
 #else
-            gen_load_fpr32h(fph, fs);
+            gen_load_fpr32h(ctx, fph, fs);
             gen_load_fpr32(fp, ft);
             gen_store_fpr32(fph, fd);
-            gen_store_fpr32h(fp, fd);
+            gen_store_fpr32h(ctx, fp, fd);
 #endif
             gen_set_label(l2);
             tcg_temp_free_i32(fp);
@@ -8740,6 +8753,7 @@ void cpu_reset(CPUState *cpu)
     }
     env->active_tc.PC = (int32_t)0xBFC00000;
     env->CP0_Random = env->tlb->nb_tlb - 1;
+    env->tlb->tlb_in_use = env->tlb->nb_tlb;
     env->CP0_Wired = 0;
     /* SMP not implemented */
     env->CP0_EBase = 0x80000000;

@@ -47,7 +47,6 @@
 
 #include "migration/qemu-file.h"
 #include "android/android.h"
-#include "android/base/sockets/SocketDrainer.h"
 #include "android/charpipe.h"
 #include "android/log-rotate.h"
 #include "modem_driver.h"
@@ -67,8 +66,10 @@
 #include "android/utils/debug.h"
 #include "android/utils/filelock.h"
 #include "android/utils/path.h"
+#include "android/utils/socket_drainer.h"
 #include "android/utils/stralloc.h"
 #include "android/utils/tempfile.h"
+#include "android/wear-agent/android_wear_agent.h"
 #include "android/display-core.h"
 #include "android/utils/timezone.h"
 #include "android/snapshot.h"
@@ -2374,6 +2375,7 @@ int main(int argc, char **argv, char **envp)
     android_net_pipes_init();
 
     socket_drainer_start(looper_newCore());
+    android_wear_agent_start(looper_newCore());
 
 #ifdef CONFIG_KVM
     /* By default, force auto-detection for kvm */
@@ -4255,6 +4257,7 @@ int main(int argc, char **argv, char **envp)
     main_loop();
     quit_timers();
     net_cleanup();
+    android_wear_agent_stop();
     socket_drainer_stop();
 
     android_emulation_teardown();

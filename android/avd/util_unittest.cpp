@@ -20,10 +20,7 @@ TEST(AvdUtil, emulator_getBackendSuffix) {
   EXPECT_STREQ("x86", emulator_getBackendSuffix("x86_64"));
   EXPECT_STREQ("mips", emulator_getBackendSuffix("mips"));
   EXPECT_STREQ("arm", emulator_getBackendSuffix("arm64"));
-
-  // TODO(digit): Add support for these CPU architectures to the emulator
-  // to change these to EXPECT_STREQ() calls.
-  EXPECT_FALSE(emulator_getBackendSuffix("mips64"));
+  EXPECT_STREQ("mips", emulator_getBackendSuffix("mips64"));
 
   EXPECT_FALSE(emulator_getBackendSuffix(NULL));
   EXPECT_FALSE(emulator_getBackendSuffix("dummy"));
@@ -113,18 +110,22 @@ TEST(AvdUtil, propertyFile_getAdbdCommunicationMode) {
   const char* valueIsBogus =
     "ro.adb.qemud=bogus";
 
-  // Empty file -> assume 1
+  // Empty file -> assume 0
   EXPECT_EQ(0, fileData_initFromMemory(&fd, emptyFile, strlen(emptyFile)));
-  EXPECT_EQ(1, propertyFile_getAdbdCommunicationMode(&fd));
+  EXPECT_EQ(0, propertyFile_getAdbdCommunicationMode(&fd));
 
+  // 0 -> 0
   EXPECT_EQ(0, fileData_initFromMemory(&fd, valueIsZero, strlen(valueIsZero)));
   EXPECT_EQ(0, propertyFile_getAdbdCommunicationMode(&fd));
 
+  // 1 -> 0.
+  // ADB hangs when using the qemud pipe, so the communication method should
+  // always be "0" (see note in propertyFile_getAdbdCommunicationMode()).
   EXPECT_EQ(0, fileData_initFromMemory(&fd, valueIsOne, strlen(valueIsOne)));
-  EXPECT_EQ(1, propertyFile_getAdbdCommunicationMode(&fd));
+  EXPECT_EQ(0, propertyFile_getAdbdCommunicationMode(&fd));
 
-  // BOGUS -> 1
+  // BOGUS -> 0
   EXPECT_EQ(0, fileData_initFromMemory(&fd, valueIsBogus, strlen(valueIsBogus)));
-  EXPECT_EQ(1, propertyFile_getAdbdCommunicationMode(&fd));
+  EXPECT_EQ(0, propertyFile_getAdbdCommunicationMode(&fd));
 }
 

@@ -45,7 +45,7 @@ EMULATOR_TARGET_CFLAGS += \
 common_LOCAL_CFLAGS =
 common_LOCAL_SRC_FILES =
 
-common_LOCAL_CFLAGS += -I$(GLIB_INCLUDE_DIR)
+common_LOCAL_CFLAGS += -I$(GLIB_INCLUDE_DIR) $(EMULATOR_COMMON_CFLAGS)
 
 # The following is to ensure that "config.h" will map to a target-specific
 # configuration file header.
@@ -361,6 +361,7 @@ LOCAL_STATIC_LIBRARIES += \
     emulator-libqemu \
     emulator-target-$(EMULATOR_TARGET_CPU) \
     emulator-libjpeg \
+    libandroid-wear-agent \
     emulator-common \
     emulator-libext4_utils \
     emulator-libsparse \
@@ -392,6 +393,7 @@ LOCAL_STATIC_LIBRARIES += \
     emulator64-libqemu \
     emulator64-target-$(EMULATOR_TARGET_CPU) \
     emulator64-libjpeg \
+    lib64android-wear-agent \
     emulator64-common \
     emulator64-libext4_utils \
     emulator64-libsparse \

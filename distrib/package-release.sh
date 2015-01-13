@@ -91,7 +91,7 @@ var_assign () {
     local __var_assign_value
     shift
     # Escape any single quote in the value.
-    __var_assign_value=$(printf "%s" "$*" | sed -e "s/'/\\'/g")
+    __var_assign_value=$(printf "%s" "$*" | sed -e "s/'/'\"'\"'/g")
     # Assign the value to the variable.
     eval $__var_assign_name=\'"$__var_assign_value"\'
 }
@@ -164,10 +164,11 @@ build_darwin_binaries_on () {
         panic "Can't rebuild binaries on Darwin, use --verbose to see why!"
 
   dump "Retrieving Darwin binaries from: $HOST"
+  # `pwd` == external/qemu
   rm -rf objs/*
-  run scp $HOST:$DST_DIR/$PKG_FILE_PREFIX/qemu/objs/emulator* objs/
-  run scp -r $HOST:$DST_DIR/$PKG_FILE_PREFIX/qemu/objs/lib objs/lib
+  run rsync -haz --delete --exclude=intermediates --exclude=libs $HOST:$DST_DIR/$PKG_FILE_PREFIX/qemu/objs .
   # TODO(digit): Retrieve PC BIOS files.
+  dump "Deleting files off darwin system"
   run ssh $HOST rm -rf $DST_DIR/$PKG_FILE_PREFIX
 }
 
@@ -213,6 +214,7 @@ esac
 DO_HELP=
 OPT_COPY_PREBUILTS=
 OPT_DARWIN_SSH=
+OPT_DEBUG=
 OPT_PKG_DIR=
 OPT_PKG_PREFIX=
 OPT_REVISION=
@@ -229,6 +231,9 @@ for OPT; do
             ;;
         --darwin-ssh=*)
             OPT_DARWIN_SSH=${OPT##--darwin-ssh=}
+            ;;
+        --debug)
+            OPT_DEBUG=true
             ;;
         --package-dir=*)
             OPT_PKG_DIR=${OPT##--package-dir=}
@@ -354,8 +359,8 @@ if [ "$OPT_COPY_PREBUILTS" ]; then
         panic "The --copy-prebuilts=<dir> option requires --darwin-ssh=<host>."
     fi
     TARGET_AOSP=$OPT_COPY_PREBUILTS
-    if [ ! -f "$TARGET_AOSP/build/envsetup.sh" ]; then
-        panic "Not an AOSP checkout / workspace: $TARGET_AOSP"
+    if [ ! -d "$TARGET_AOSP/prebuilts/android-emulator" ]; then
+        panic "Could not find prebuilts/android-emulator in: '$TARGET_AOSP'"
     fi
     TARGET_PREBUILTS_DIR=$TARGET_AOSP/prebuilts/android-emulator
     log "Using AOSP prebuilts directory: $TARGET_PREBUILTS_DIR"
@@ -367,6 +372,8 @@ elif [ -f "$PROGDIR/../../../build/envsetup.sh" ]; then
     if [ ! -d "$TARGET_PREBUILTS_DIR" ]; then
         TARGET_PREBUILTS_DIR=
     fi
+else
+    TARGET_AOSP=$(cd $PROGDIR/../../.. && pwd -P)
 fi
 
 case $VERBOSE in
@@ -380,6 +387,10 @@ case $VERBOSE in
     REBUILD_FLAGS="--verbose --verbose"
     ;;
 esac
+
+if [ "$OPT_DEBUG" ]; then
+    REBUILD_FLAGS="$REBUILD_FLAGS --debug"
+fi
 
 # Remove duplicates.
 SYSTEMS=$(echo "$SYSTEMS" | tr ' ' '\n' | sort -u | tr '\n' ' ')
@@ -570,28 +581,54 @@ EOF
 done
 
 if [ "$OPT_COPY_PREBUILTS" ]; then
-    for SYSTEM in linux darwin; do
+    for SYSTEM in linux darwin windows; do
         SRC_DIR="$TEMP_BUILD_DIR"/$SYSTEM/$PKG_PREFIX-$PKG_REVISION
-        DST_DIR=$TARGET_PREBUILTS_DIR/$SYSTEM-x86_64
-        dump "[$SYSTEM-x86_64] Copying emulator binaries into $DST_DIR"
+        if [ $SYSTEM = "windows" ]; then
+            SYSTEM_ARCH=$SYSTEM
+            BITNESS=
+        else
+            SYSTEM_ARCH=$SYSTEM-x86_64
+            BITNESS=64
+        fi
+        DST_DIR=$TARGET_PREBUILTS_DIR/$SYSTEM_ARCH
+        dump "[$SYSTEM_ARCH] Copying emulator binaries into $DST_DIR"
         run mkdir -p "$DST_DIR" || panic "Could not create directory: $DST_DIR"
+        EXEEXT=
         case $SYSTEM in
             linux) DLLEXT=.so;;
             darwin) DLLEXT=.dylib;;
+            windows)
+              DLLEXT=.dll
+              EXEEXT=.exe
+              ;;
             *) panic "Unsupported prebuilt system: $SYSTEM";;
         esac
-        FILES="emulator"
+        FILES="emulator$EXEEXT"
         for ARCH in arm x86 mips; do
-            FILES="$FILES emulator64-$ARCH"
+            FILES="$FILES emulator$BITNESS-$ARCH$EXEEXT"
         done
-        for ARCH in x86_64 arm64; do
-            if [ -f "$SRC_DIR/tools/emulator64-$ARCH" ]; then
-                FILES="$FILES emulator64-$ARCH"
+        for ARCH in arm64; do
+            if [ -f "$SRC_DIR/tools/emulator64-$ARCH$EXEEXT" ]; then
+                FILES="$FILES emulator64-$ARCH$EXEEXT"
             fi
         done
+
         for LIB in OpenglRender EGL_translator GLES_CM_translator GLES_V2_translator; do
-            FILES="$FILES lib/lib64$LIB$DLLEXT"
+            FILES="$FILES lib/lib$BITNESS$LIB$DLLEXT"
         done
+
+        # temparily include linux 32 bit binaries
+        if [ $SYSTEM = "linux" ]; then
+            BITNESS=
+            for ARCH in arm x86 mips; do
+                FILES="$FILES emulator$BITNESS-$ARCH$EXEEXT"
+            done
+            for LIB in OpenglRender EGL_translator GLES_CM_translator GLES_V2_translator; do
+                FILES="$FILES lib/lib$BITNESS$LIB$DLLEXT"
+            done
+        fi
+
+
         (cd "$SRC_DIR/tools" && tar cf - $FILES) | (cd $DST_DIR && tar xf -) ||
                 panic "Could not copy binaries to $DST_DIR"
     done

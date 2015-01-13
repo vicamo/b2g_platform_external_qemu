@@ -57,11 +57,17 @@ gen-hw-config-defs = \
 common_LOCAL_CFLAGS =
 common_LOCAL_SRC_FILES =
 
-EMULATOR_COMMON_CFLAGS :=
+EMULATOR_COMMON_CFLAGS := -Werror=implicit-function-declaration
 
 # Needed by everything about the host
 EMULATOR_COMMON_CFLAGS += \
-    -I$(LOCAL_PATH)/android/config/$(QEMU_HOST_TAG)
+    -I$(LOCAL_PATH)/android/config/$(QEMU_HOST_TAG) \
+    -I$(LOCAL_PATH)/include
+
+# Need to include "qapi-types.h" and other auto-generated files from
+# android-configure.sh
+EMULATOR_COMMON_CFLAGS += -I$(LOCAL_PATH)/qapi-auto-generated
+
 
 # add the build ID to the default macro definitions
 ifeq ($(BUILD_STANDALONE_EMULATOR),)
@@ -108,17 +114,24 @@ common_LOCAL_SRC_FILES += \
 	android/async-utils.c \
 	android/charmap.c \
 	android/framebuffer.c \
-	android/iolooper-select.c \
+	android/iolooper.cpp \
 	android/keycode-array.c \
 	android/avd/hw-config.c \
 	android/avd/info.c \
 	android/avd/util.c \
 	android/sockets.c \
 	android/sync-utils.c \
+	android/base/async/AsyncReader.cpp \
+	android/base/async/AsyncWriter.cpp \
+	android/base/async/Looper.cpp \
 	android/base/containers/PodVector.cpp \
+	android/base/containers/PointerSet.cpp \
+	android/base/containers/HashUtils.cpp \
 	android/base/containers/StringVector.cpp \
 	android/base/files/PathUtils.cpp \
 	android/base/sockets/SocketDrainer.cpp \
+	android/base/sockets/SocketUtils.cpp \
+	android/base/sockets/SocketWaiter.cpp \
 	android/base/Log.cpp \
 	android/base/String.cpp \
 	android/base/StringFormat.cpp \
@@ -129,7 +142,10 @@ common_LOCAL_SRC_FILES += \
 	android/filesystems/partition_types.cpp \
 	android/filesystems/ramdisk_extractor.cpp \
 	android/kernel/kernel_utils.cpp \
+	android/qemu/base/async/Looper.cpp \
+	android/looper-base.cpp \
 	android/looper-generic.cpp \
+	android/utils/aconfig-file.c \
 	android/utils/assert.c \
 	android/utils/bufprint.c \
 	android/utils/debug.c \
@@ -138,6 +154,7 @@ common_LOCAL_SRC_FILES += \
 	android/utils/eintr_wrapper.c \
 	android/utils/filelock.c \
 	android/utils/file_data.c \
+	android/utils/format.cpp \
 	android/utils/host_bitness.c \
 	android/utils/ini.c \
 	android/utils/intmap.c \
@@ -149,7 +166,9 @@ common_LOCAL_SRC_FILES += \
 	android/utils/property_file.c \
 	android/utils/reflist.c \
 	android/utils/refset.c \
+	android/utils/socket_drainer.cpp \
 	android/utils/stralloc.c \
+	android/utils/string.cpp \
 	android/utils/system.c \
 	android/utils/tempfile.c \
 	android/utils/uncompress.cpp \
@@ -160,10 +179,15 @@ common_LOCAL_CFLAGS += $(EMULATOR_COMMON_CFLAGS)
 
 common_LOCAL_CFLAGS += -I$(LIBEXT4_UTILS_INCLUDES)
 
+include $(LOCAL_PATH)/android/wear-agent/sources.mk
+
 ## one for 32-bit
 $(call start-emulator-library, emulator-common)
 LOCAL_CFLAGS += $(common_LOCAL_CFLAGS)
 LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
+ifeq (32,$(EMULATOR_PROGRAM_BITNESS))
+    LOCAL_IGNORE_BITNESS := true
+endif
 $(call gen-hw-config-defs)
 $(call end-emulator-library)
 
@@ -275,7 +299,6 @@ SKIN_SOURCES := rect.c \
                 file.c \
                 window.c \
                 scaler.c \
-                composer.c \
                 surface.c \
 
 common_LOCAL_SRC_FILES += $(SKIN_SOURCES:%=android/skin/%)
@@ -425,7 +448,6 @@ CORE_MISC_SOURCES = \
     android/boot-properties.c \
     android/cbuffer.c \
     android/charpipe.c \
-    android/config-file.c \
     android/core-init-utils.c   \
     android/gps.c \
     android/hw-kmsg.c \
@@ -434,8 +456,9 @@ CORE_MISC_SOURCES = \
     android/hw-control.c \
     android/hw-sensors.c \
     android/hw-qemud.c \
-    android/looper-qemu.c \
+    android/looper-qemu.cpp \
     android/hw-pipe-net.c \
+    android/qemu/base/async/Looper.cpp \
     android/qemu-setup.c \
     android/qemu-tcpdump.c \
     android/shaper.c \

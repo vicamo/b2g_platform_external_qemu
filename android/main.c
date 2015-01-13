@@ -33,14 +33,15 @@
 #include "math.h"
 
 #include "android/charmap.h"
-#include "android/utils/debug.h"
-#include "android/config-file.h"
 #include "android/config/config.h"
 #include "android/cpu_accelerator.h"
 
 #include "android/kernel/kernel_utils.h"
 #include "android/user-config.h"
+
+#include "android/utils/aconfig-file.h"
 #include "android/utils/bufprint.h"
+#include "android/utils/debug.h"
 #include "android/utils/filelock.h"
 #include "android/utils/lineinput.h"
 #include "android/utils/path.h"
@@ -1301,23 +1302,23 @@ int main(int argc, char **argv)
         dprint("CPU Acceleration status: %s", accel_status);
     }
 
-    // Special case: x86_64 emulation currently requires hardware
+    // Special case: x86/x86_64 emulation currently requires hardware
     // acceleration, so refuse to start in 'auto' mode if it is not
     // available.
     {
         char* abi = avdInfo_getTargetAbi(avd);
-        if (!strcmp(abi, "x86_64")) {
+        if (!strncmp(abi, "x86", 3)) {
             if (!accel_ok && accel_mode != ACCEL_OFF) {
-                derror("x86_64 emulation currently requires hardware acceleration!\n"
+                derror("%s emulation currently requires hardware acceleration!\n"
                     "Please ensure %s is properly installed and usable.\n"
                     "CPU acceleration status: %s",
-                    kAccelerator, accel_status);
+                    abi, kAccelerator, accel_status);
                 exit(1);
             }
             else if (accel_mode == ACCEL_OFF) {
                 // '-no-accel' of '-accel off' was used explicitly. Warn about
                 // the issue but do not exit.
-                dwarning("x86_64 emulation may not work without hardware acceleration!");
+                dwarning("%s emulation may not work without hardware acceleration!", abi);
             }
         }
         AFREE(abi);

@@ -239,14 +239,12 @@ propertyFile_getApiLevel(const FileData* data) {
 
 int
 propertyFile_getAdbdCommunicationMode(const FileData* data) {
-    SearchResult searchResult;
-    int qemud = propertyFile_getInt(data, "ro.adb.qemud", 1, &searchResult);
-    if (searchResult == RESULT_FOUND) {
-        D("Found ro.adb.qemud build property: %d", qemud);
-        return qemud;
-    }
-    D("ro.adb.qemud invalid or not found, API >= 16, defaulting ro.adb.qemud==1");
-    return 1;
+    // adb sporadically hangs when using a pipe to communicate with qemud, so
+    // disable the qemud pipe.
+    // TODO: Fix the hang with qemud and change back to reading the
+    // communication method from the ro.adb.qemud build property.
+    D("Forcing ro.adb.qemud to \"0\".");
+    return 0;
 }
 
 char* path_getBuildBuildProp(const char* androidOut) {
@@ -340,6 +338,7 @@ emulator_getBackendSuffix(const char* targetArch)
         { "x86_64", "x86" },
         { "mips", "mips" },
         { "arm64", "arm" },
+        { "mips64", "mips" },
         // Add more if needed here.
     };
     size_t n;
