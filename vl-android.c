@@ -3237,6 +3237,11 @@ int main(int argc, char **argv, char **envp)
 
     iniFile_free(hw_ini);
 
+    const char* kernelSerialDevicePrefix =
+            androidHwConfig_getKernelSerialPrefix(android_hw);
+    VERBOSE_PRINT(init, "Using kernel serial device prefix: %s",
+                  kernelSerialDevicePrefix);
+
     {
         int width  = android_hw->hw_lcd_width;
         int height = android_hw->hw_lcd_height;
@@ -3601,9 +3606,6 @@ int main(int argc, char **argv, char **envp)
 
         snprintf(tmp,sizeof(tmp),"cache,size=0x%" PRIx64, partSize);
 
-        // NOTE: Assume the /cache and /data partitions have the same format
-        cacheImageIsExt4 = dataImageIsExt4;
-
         if (partPath && *partPath && strcmp(partPath, "<temp>") != 0) {
             if (filelock_create(partPath) == NULL) {
                 fprintf(stderr, "WARNING: Cache partition already in use. Changes will not persist!\n");
@@ -3621,6 +3623,14 @@ int main(int argc, char **argv, char **envp)
                 pstrcat(tmp, sizeof(tmp), partPath);
             }
         }
+        // NOTE: The following line is commented to avoid problems with the
+        // current state of the emulator and AOSP/master. In a nutshell,
+        // take it out of the comment once proper support for generating
+        // EXT4 partitions on demand is added to the emulator, and
+        //  /etc/fstab.goldfish is modified to mount an EXT4, not YAFFS2,
+        // partition for /cache.
+        //
+        // cacheImageIsExt4 = partPath && android_pathIsExt4PartitionImage(partPath);
         if (cacheImageIsExt4) {
             /* Using a nand device to approximate a block device until full
              * support is added */
@@ -3670,12 +3680,16 @@ int main(int argc, char **argv, char **envp)
     /* We always initialize the first serial port for the android-kmsg
      * character device (used to send kernel messages) */
     serial_hds_add_at(0, "android-kmsg");
-    stralloc_add_str(kernel_params, " console=ttyS0");
+    stralloc_add_format(kernel_params,
+                        " console=%s0",
+                        kernelSerialDevicePrefix);
 
     /* We always initialize the second serial port for the android-qemud
      * character device as well */
     serial_hds_add_at(1, "android-qemud");
-    stralloc_add_str(kernel_params, " android.qemud=ttyS1");
+    stralloc_add_format(kernel_params,
+                        " android.qemud=%s1",
+                        kernelSerialDevicePrefix);
 
     if (pid_file && qemu_create_pidfile(pid_file) != 0) {
         os_pidfile_error();
