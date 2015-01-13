@@ -10,6 +10,7 @@
 ** GNU General Public License for more details.
 */
 #include "migration/qemu-file.h"
+#include "migration/vmstate.h"
 #include "cpu.h"
 #include "hw/android/goldfish/device.h"
 #include "android/utils/debug.h"
@@ -177,7 +178,7 @@ goldfish_rfkill_init()
 
     goldfish_device_add(&s->dev, goldfish_rfkill_readfn, goldfish_rfkill_writefn, s);
 
-    register_savevm( "rfkill_state", 0, RFKILL_STATE_SAVE_VERSION,
+    register_savevm( NULL, "rfkill_state", 0, RFKILL_STATE_SAVE_VERSION,
                      goldfish_rfkill_save, goldfish_rfkill_load, s);
 }
 

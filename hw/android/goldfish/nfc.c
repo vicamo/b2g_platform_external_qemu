@@ -16,6 +16,7 @@
 #include "hw/nfc/hci.h"
 #include "hw/nfc/nci.h"
 #include "migration/qemu-file.h"
+#include "migration/vmstate.h"
 #include "hw/android/goldfish/device.h"
 #include "hw/android/goldfish/nfc.h"
 
@@ -318,7 +319,7 @@ goldfish_nfc_init()
     goldfish_device_add(&s->dev, goldfish_nfc_readfn,
                         goldfish_nfc_writefn, s);
 
-    register_savevm("nfc_state", 0, NCIDEV_STATE_SAVE_VERSION,
+    register_savevm(NULL, "nfc_state", 0, NCIDEV_STATE_SAVE_VERSION,
                     goldfish_nfc_save, goldfish_nfc_load, s);
 }
 
