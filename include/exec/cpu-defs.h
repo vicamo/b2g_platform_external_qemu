@@ -95,20 +95,20 @@ typedef struct CPUTLBEntry {
     target_ulong addr_code;
     /* Addend to virtual address to get host address.  IO accesses
        use the corresponding iotlb value.  */
-    size_t addend;
+    uintptr_t addend;
     /* padding to get a power of two size */
     uint8_t dummy[(1 << CPU_TLB_ENTRY_BITS) -
                   (sizeof(target_ulong) * 3 +
-                   ((-sizeof(target_ulong) * 3) & (sizeof(size_t) - 1)) +
-                   sizeof(size_t))];
+                   ((-sizeof(target_ulong) * 3) & (sizeof(uintptr_t) - 1)) +
+                   sizeof(uintptr_t))];
 } CPUTLBEntry;
 
-extern int CPUTLBEntry_wrong_size[sizeof(CPUTLBEntry) == (1 << CPU_TLB_ENTRY_BITS) ? 1 : -1];
+QEMU_BUILD_BUG_ON(sizeof(CPUTLBEntry) != (1 << CPU_TLB_ENTRY_BITS));
 
 #define CPU_COMMON_TLB \
     /* The meaning of the MMU modes is defined in the target code. */   \
     CPUTLBEntry tlb_table[NB_MMU_MODES][CPU_TLB_SIZE];                  \
-    hwaddr iotlb[NB_MMU_MODES][CPU_TLB_SIZE];               \
+    hwaddr iotlb[NB_MMU_MODES][CPU_TLB_SIZE];                           \
     target_ulong tlb_flush_addr;                                        \
     target_ulong tlb_flush_mask;
 

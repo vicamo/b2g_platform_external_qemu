@@ -956,7 +956,7 @@ int cpu_x86_signal_handler(int host_signum, void *pinfo,
 
 /* helper.c */
 int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
-                             int is_write, int mmu_idx, int is_softmmu);
+                             int is_write, int mmu_idx);
 void cpu_x86_set_a20(CPUX86State *env, int a20_state);
 void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
                    uint32_t *eax, uint32_t *ebx,
@@ -1033,6 +1033,36 @@ static inline int cpu_mmu_index (CPUX86State *env)
     return (env->hflags & HF_CPL_MASK) == 3 ? 1 : 0;
 }
 
+#undef EAX
+#define EAX (env->regs[R_EAX])
+#undef ECX
+#define ECX (env->regs[R_ECX])
+#undef EDX
+#define EDX (env->regs[R_EDX])
+#undef EBX
+#define EBX (env->regs[R_EBX])
+#undef ESP
+#define ESP (env->regs[R_ESP])
+#undef EBP
+#define EBP (env->regs[R_EBP])
+#undef ESI
+#define ESI (env->regs[R_ESI])
+#undef EDI
+#define EDI (env->regs[R_EDI])
+#undef EIP
+#define EIP (env->eip)
+#define DF  (env->df)
+
+#define CC_SRC (env->cc_src)
+#define CC_DST (env->cc_dst)
+#define CC_OP  (env->cc_op)
+
+/* float macros */
+#define FT0    (env->ft0)
+#define ST0    (env->fpregs[env->fpstt].d)
+#define ST(n)  (env->fpregs[(env->fpstt + (n)) & 7].d)
+#define ST1    ST(1)
+
 /* translate.c */
 void optimize_flags_init(void);
 
@@ -1056,12 +1086,23 @@ static inline void cpu_clone_regs(CPUX86State *env, target_ulong newsp)
 }
 #endif
 
-//#include "exec/cpu-all.h"
-#include "exec/exec-all.h"
-
-struct TranslationBlock;
-
+#include "exec/cpu-all.h"
 #include "svm.h"
+
+static inline bool cpu_has_work(CPUX86State *env)
+{
+    int work;
+
+    work = (env->interrupt_request & CPU_INTERRUPT_HARD) &&
+           (env->eflags & IF_MASK);
+    work |= env->interrupt_request & CPU_INTERRUPT_NMI;
+    work |= env->interrupt_request & CPU_INTERRUPT_INIT;
+    work |= env->interrupt_request & CPU_INTERRUPT_SIPI;
+
+    return work;
+}
+
+#include "exec/exec-all.h"
 
 static inline void cpu_pc_from_tb(CPUX86State *env, TranslationBlock *tb)
 {
@@ -1081,4 +1122,17 @@ void apic_init_reset(CPUX86State *env);
 void apic_sipi(CPUX86State *env);
 void do_cpu_init(CPUX86State *env);
 void do_cpu_sipi(CPUX86State *env);
+
+/* op_helper.c */
+void do_interrupt(CPUArchState *env);
+void do_interrupt_x86_hardirq(CPUArchState *env, int intno, int is_hw);
+//void QEMU_NORETURN raise_exception_err(int exception_index, int error_code);
+void QEMU_NORETURN raise_exception(int exception_index);
+
+void do_smm_enter(CPUArchState *env1);
+
+void svm_check_intercept(CPUArchState *env1, uint32_t type);
+
+uint32_t cpu_cc_compute_all(CPUArchState *env1, int op);
+
 #endif /* CPU_I386_H */

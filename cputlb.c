@@ -22,8 +22,8 @@
 #include "exec/exec-all.h"
 #include "exec/cputlb.h"
 
-#ifdef CONFIG_MEMCHECK
-#include "memcheck/memcheck_api.h"
+#ifdef CONFIG_ANDROID_MEMCHECK
+#include "android/qemu/memcheck/memcheck_api.h"
 #endif
 
 /* statistics */
@@ -68,6 +68,9 @@ void tlb_flush(CPUArchState *env, int flush_global)
     }
 
     memset(env->tb_jmp_cache, 0, TB_JMP_CACHE_SIZE * sizeof (void *));
+
+    env->tlb_flush_addr = -1;
+    env->tlb_flush_mask = 0;
     tlb_flush_count++;
 }
 
@@ -91,6 +94,16 @@ void tlb_flush_page(CPUArchState *env, target_ulong addr)
 #if defined(DEBUG_TLB)
     printf("tlb_flush_page: " TARGET_FMT_lx "\n", addr);
 #endif
+    /* Check if we need to flush due to large pages.  */
+    if ((addr & env->tlb_flush_mask) == env->tlb_flush_addr) {
+#if defined(DEBUG_TLB)
+        printf("tlb_flush_page: forced full flush ("
+               TARGET_FMT_lx "/" TARGET_FMT_lx ")\n",
+               env->tlb_flush_addr, env->tlb_flush_mask);
+#endif
+        tlb_flush(env, 1);
+        return;
+    }
     /* must reset current TB so that interrupts cannot modify the
        links while we are modifying them */
     env->current_tb = NULL;
@@ -161,13 +174,35 @@ void tlb_set_dirty(CPUArchState *env, target_ulong vaddr)
     }
 }
 
-/* add a new TLB entry. At most one entry for a given virtual address
-   is permitted. Return 0 if OK or 2 if the page could not be mapped
-   (can only happen in non SOFTMMU mode for I/O pages or pages
-   conflicting with the host address space). */
-int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
-                      hwaddr paddr, int prot,
-                      int mmu_idx, int is_softmmu)
+/* Our TLB does not support large pages, so remember the area covered by
+   large pages and trigger a full TLB flush if these are invalidated.  */
+static void tlb_add_large_page(CPUArchState *env, target_ulong vaddr,
+                               target_ulong size)
+{
+    target_ulong mask = ~(size - 1);
+
+    if (env->tlb_flush_addr == (target_ulong)-1) {
+        env->tlb_flush_addr = vaddr & mask;
+        env->tlb_flush_mask = mask;
+        return;
+    }
+    /* Extend the existing region to include the new page.
+       This is a compromise between unnecessary flushes and the cost
+       of maintaining a full variable size TLB.  */
+    mask &= env->tlb_flush_mask;
+    while (((env->tlb_flush_addr ^ vaddr) & mask) != 0) {
+        mask <<= 1;
+    }
+    env->tlb_flush_addr &= mask;
+    env->tlb_flush_mask = mask;
+}
+
+/* Add a new TLB entry. At most one entry for a given virtual address
+   is permitted. Only a single TARGET_PAGE_SIZE region is mapped, the
+   supplied size is only used by tlb_flush_page.  */
+void tlb_set_page(CPUArchState *env, target_ulong vaddr,
+                  hwaddr paddr, int prot,
+                  int mmu_idx, target_ulong size)
 {
     PhysPageDesc *p;
     unsigned long pd;
@@ -175,11 +210,14 @@ int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
     target_ulong address;
     target_ulong code_address;
     ptrdiff_t addend;
-    int ret;
     CPUTLBEntry *te;
     CPUWatchpoint *wp;
     hwaddr iotlb;
 
+    assert(size >= TARGET_PAGE_SIZE);
+    if (size != TARGET_PAGE_SIZE) {
+        tlb_add_large_page(env, vaddr, size);
+    }
     p = phys_page_find(paddr >> TARGET_PAGE_BITS);
     if (!p) {
         pd = IO_MEM_UNASSIGNED;
@@ -188,11 +226,10 @@ int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
     }
 #if defined(DEBUG_TLB)
     printf("tlb_set_page: vaddr=" TARGET_FMT_lx " paddr=0x" TARGET_FMT_plx
-           " prot=%x idx=%d smmu=%d pd=0x%08lx\n",
-           vaddr, paddr, prot, mmu_idx, is_softmmu, pd);
+           " prot=%x idx=%d pd=0x%08lx\n",
+           vaddr, paddr, prot, mmu_idx, pd);
 #endif
 
-    ret = 0;
     address = vaddr;
     if ((pd & ~TARGET_PAGE_MASK) > IO_MEM_ROM && !(pd & IO_MEM_ROMD)) {
         /* IO memory case (romd handled later) */
@@ -263,7 +300,7 @@ int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
         te->addr_write = -1;
     }
 
-#ifdef CONFIG_MEMCHECK
+#ifdef CONFIG_ANDROID_MEMCHECK
     /*
      * If we have memchecker running, we need to make sure that page, cached
      * into TLB as the result of this operation will comply with our requirement
@@ -280,7 +317,8 @@ int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
      *  - Cached page belongs to RAM, not I/O area.
      *  - Page is cached for read, or write access.
      */
-    if (memcheck_instrument_mmu && mmu_idx == 1 && !is_softmmu &&
+#if 0
+    if (memcheck_instrument_mmu && mmu_idx == 1 && 
         (pd & ~TARGET_PAGE_MASK) == IO_MEM_RAM &&
         (prot & (PAGE_READ | PAGE_WRITE)) &&
         memcheck_is_checked(vaddr & TARGET_PAGE_MASK, TARGET_PAGE_SIZE)) {
@@ -291,21 +329,38 @@ int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
             te->addr_write ^= TARGET_PAGE_MASK;
         }
     }
-#endif  // CONFIG_MEMCHECK
-
-    return ret;
+#endif
+#endif  // CONFIG_ANDROID_MEMCHECK
 }
 
-int tlb_set_page(CPUArchState *env1, target_ulong vaddr,
-                 hwaddr paddr, int prot,
-                 int mmu_idx, int is_softmmu)
+/* NOTE: this function can trigger an exception */
+/* NOTE2: the returned address is not exactly the physical address: it
+   is the offset relative to phys_ram_base */
+tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong addr)
 {
-    if (prot & PAGE_READ)
-        prot |= PAGE_EXEC;
-    return tlb_set_page_exec(env1, vaddr, paddr, prot, mmu_idx, is_softmmu);
+    int mmu_idx, page_index, pd;
+    void *p;
+
+    page_index = (addr >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
+    mmu_idx = cpu_mmu_index(env1);
+    if (unlikely(env1->tlb_table[mmu_idx][page_index].addr_code !=
+                 (addr & TARGET_PAGE_MASK))) {
+        cpu_ldub_code(env1, addr);
+    }
+    pd = env1->tlb_table[mmu_idx][page_index].addr_code & ~TARGET_PAGE_MASK;
+    if (pd > IO_MEM_ROM && !(pd & IO_MEM_ROMD)) {
+#if defined(TARGET_SPARC) || defined(TARGET_MIPS)
+        cpu_unassigned_access(env1, addr, 0, 1, 0, 4);
+#else
+        cpu_abort(env1, "Trying to execute code outside RAM or ROM at 0x" TARGET_FMT_lx "\n", addr);
+#endif
+    }
+    p = (void *)((uintptr_t)addr + env1->tlb_table[mmu_idx][page_index].addend);
+    return qemu_ram_addr_from_host_nofail(p);
 }
 
 #define MMUSUFFIX _cmmu
+#undef GETPC
 #define GETPC() NULL
 #define env cpu_single_env
 #define SOFTMMU_CODE_ACCESS

@@ -25,7 +25,6 @@
 #include <signal.h>
 
 #include "cpu.h"
-#include "exec/exec-all.h"
 #include "qemu-common.h"
 #include "sysemu/kvm.h"
 #include "exec/hax.h"
@@ -929,7 +928,7 @@ void cpu_x86_update_cr4(CPUX86State *env, uint32_t new_cr4)
 #if defined(CONFIG_USER_ONLY)
 
 int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
-                             int is_write, int mmu_idx, int is_softmmu)
+                             int is_write, int mmu_idx)
 {
     /* user mode only emulation */
     is_write &= 1;
@@ -959,14 +958,13 @@ hwaddr cpu_get_phys_page_debug(CPUX86State *env, target_ulong addr)
    -1 = cannot handle fault
    0  = nothing more to do
    1  = generate PF fault
-   2  = soft MMU activation required for this block
 */
 int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
-                             int is_write1, int mmu_idx, int is_softmmu)
+                             int is_write1, int mmu_idx)
 {
     uint64_t ptep, pte;
     target_ulong pde_addr, pte_addr;
-    int error_code, is_dirty, prot, page_size, ret, is_write, is_user;
+    int error_code, is_dirty, prot, page_size, is_write, is_user;
     hwaddr paddr;
     uint32_t page_offset;
     target_ulong vaddr, virt_addr;
@@ -1227,8 +1225,8 @@ int cpu_x86_handle_mmu_fault(CPUX86State *env, target_ulong addr,
     paddr = (pte & TARGET_PAGE_MASK) + page_offset;
     vaddr = virt_addr + page_offset;
 
-    ret = tlb_set_page_exec(env, vaddr, paddr, prot, mmu_idx, is_softmmu);
-    return ret;
+    tlb_set_page(env, vaddr, paddr, prot, mmu_idx, page_size);
+    return 0;
  do_fault_protect:
     error_code = PG_ERROR_P_MASK;
  do_fault:
@@ -1413,8 +1411,6 @@ int check_hw_breakpoints(CPUX86State *env, int force_dr6_update)
         env->dr[6] = dr6;
     return hit_enabled;
 }
-
-void raise_exception(int exception_index);
 
 static void breakpoint_handler(CPUX86State *env)
 {
