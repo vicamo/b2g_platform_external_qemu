@@ -8,7 +8,7 @@
  *****
  *****/
 
-#ifdef CONFIG_MEMCHECK
+#ifdef CONFIG_ANDROID_MEMCHECK
 
 /*
  * Memchecker addition in this module is intended to inject qemu callback into
@@ -25,8 +25,8 @@
  * guaranteed.
  */
 
-#include "memcheck/memcheck_proc_management.h"
-#include "memcheck/memcheck_api.h"
+#include "android/qemu/memcheck/memcheck_proc_management.h"
+#include "android/qemu/memcheck/memcheck_api.h"
 
 /* Array of return addresses detected in gen_intermediate_code_internal. */
 AddrArray   ret_addresses = { 0 };
@@ -93,7 +93,7 @@ is_arm_bl_or_blx(uint32_t insn)
  *  boolean: 1 if THUMB instruction is BL/BLX, or 0 if it's not.
  */
 static inline int
-is_thumb_bl_or_blx(uint16_t insn, target_ulong pc, target_ulong* ret_off)
+is_thumb_bl_or_blx(CPUARMState* env, uint16_t insn, target_ulong pc, target_ulong* ret_off)
 {
     /* THUMB BLX(register):      0100 0111 1xxx xxxx
      * THUMB BL(1-stimmediate):  1111 0xxx xxxx xxxx
@@ -104,7 +104,7 @@ is_thumb_bl_or_blx(uint16_t insn, target_ulong pc, target_ulong* ret_off)
         return 1;
     } else if ((insn & 0xF800) == 0xF000) {     // THUMB BL(X)(imm)
         // This is a 32-bit THUMB. Get the second half of the instuction.
-        insn = lduw_code(pc + 2);
+        insn = cpu_lduw_code(env, pc + 2);
         if ((insn & 0xC000) == 0xC000) {
             *ret_off = 4;
             return 1;
@@ -225,7 +225,7 @@ set_on_ret(target_ulong ret)
         if (is_ret_address(env, s->pc)) { \
             set_on_ret(s->pc); \
         } \
-        if (is_thumb_bl_or_blx(insn, s->pc, &ret_off)) { \
+        if (is_thumb_bl_or_blx(env, insn, s->pc, &ret_off)) { \
             set_on_call(s->pc, s->pc + ret_off); \
             if (!s->search_pc) { \
                 register_ret_address(env, s->pc + ret_off); \
@@ -255,7 +255,7 @@ set_on_ret(target_ulong ret)
         } \
     } while (0)
 
-#else /* !CONFIG_MEMCHECK */
+#else /* !CONFIG_ANDROID_MEMCHECK */
 
 #  define ANDROID_WATCH_CALLSTACK_ARM     ((void)0)
 #  define ANDROID_WATCH_CALLSTACK_THUMB   ((void)0)
@@ -264,4 +264,4 @@ set_on_ret(target_ulong ret)
 #  define ANDROID_CHECK_CODEGEN_PC(s)      (s)
 #  define ANDROID_END_CODEGEN()            ((void)0)
 
-#endif  /* !CONFIG_MEMCHECK */
+#endif  /* !CONFIG_ANDROID_MEMCHECK */

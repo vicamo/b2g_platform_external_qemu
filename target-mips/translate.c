@@ -26,7 +26,6 @@
 #include <inttypes.h>
 
 #include "cpu.h"
-#include "exec/exec-all.h"
 #include "disas/disas.h"
 #include "tcg-op.h"
 #include "qemu-common.h"
@@ -8345,7 +8344,7 @@ gen_intermediate_code_internal (CPUMIPSState *env, TranslationBlock *tb,
         }
         if (num_insns + 1 == max_insns && (tb->cflags & CF_LAST_IO))
             gen_io_start();
-        ctx.opcode = ldl_code(ctx.pc);
+        ctx.opcode = cpu_ldl_code(env, ctx.pc);
         decode_opc(env, &ctx);
         ctx.pc += 4;
         num_insns++;
@@ -8570,11 +8569,6 @@ static void mips_tcg_init(void)
     fpu_fcr31 = tcg_global_mem_new_i32(TCG_AREG0,
                                        offsetof(CPUMIPSState, active_fpu.fcr31),
                                        "fcr31");
-
-    /* register helpers */
-#define GEN_HELPER 2
-#include "helper.h"
-
     inited = 1;
 }
 

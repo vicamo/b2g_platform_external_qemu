@@ -17,11 +17,70 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include <stdlib.h>
-#include "exec.h"
+#include "cpu.h"
+#include "dyngen-exec.h"
 
 #include "qemu/host-utils.h"
 
 #include "helper.h"
+
+#if !defined(CONFIG_USER_ONLY)
+#include "exec/softmmu_exec.h"
+#endif /* !defined(CONFIG_USER_ONLY) */
+
+#ifndef CONFIG_USER_ONLY
+static inline void cpu_mips_tlb_flush (CPUMIPSState *env, int flush_global);
+#endif
+
+static inline void compute_hflags(CPUMIPSState *env)
+{
+    env->hflags &= ~(MIPS_HFLAG_COP1X | MIPS_HFLAG_64 | MIPS_HFLAG_CP0 |
+                     MIPS_HFLAG_F64 | MIPS_HFLAG_FPU | MIPS_HFLAG_KSU |
+                     MIPS_HFLAG_UX);
+    if (!(env->CP0_Status & (1 << CP0St_EXL)) &&
+        !(env->CP0_Status & (1 << CP0St_ERL)) &&
+        !(env->hflags & MIPS_HFLAG_DM)) {
+        env->hflags |= (env->CP0_Status >> CP0St_KSU) & MIPS_HFLAG_KSU;
+    }
+#if defined(TARGET_MIPS64)
+    if (((env->hflags & MIPS_HFLAG_KSU) != MIPS_HFLAG_UM) ||
+        (env->CP0_Status & (1 << CP0St_PX)) ||
+        (env->CP0_Status & (1 << CP0St_UX))) {
+        env->hflags |= MIPS_HFLAG_64;
+    }
+    if (env->CP0_Status & (1 << CP0St_UX)) {
+        env->hflags |= MIPS_HFLAG_UX;
+    }
+#endif
+    if ((env->CP0_Status & (1 << CP0St_CU0)) ||
+        !(env->hflags & MIPS_HFLAG_KSU)) {
+        env->hflags |= MIPS_HFLAG_CP0;
+    }
+    if (env->CP0_Status & (1 << CP0St_CU1)) {
+        env->hflags |= MIPS_HFLAG_FPU;
+    }
+    if (env->CP0_Status & (1 << CP0St_FR)) {
+        env->hflags |= MIPS_HFLAG_F64;
+    }
+    if (env->insn_flags & ISA_MIPS32R2) {
+        if (env->active_fpu.fcr0 & (1 << FCR0_F64)) {
+            env->hflags |= MIPS_HFLAG_COP1X;
+        }
+    } else if (env->insn_flags & ISA_MIPS32) {
+        if (env->hflags & MIPS_HFLAG_64) {
+            env->hflags |= MIPS_HFLAG_COP1X;
+        }
+    } else if (env->insn_flags & ISA_MIPS4) {
+        /* All supported MIPS IV CPUs use the XX (CU3) to enable
+           and disable the MIPS IV extensions to the MIPS III ISA.
+           Some other MIPS IV CPUs ignore the bit, so the check here
+           would be too restrictive for them.  */
+        if (env->CP0_Status & (1 << CP0St_CU3)) {
+            env->hflags |= MIPS_HFLAG_COP1X;
+        }
+    }
+}
+
 /*****************************************************************************/
 /* Exceptions processing helpers */
 
@@ -70,7 +129,7 @@ static void do_restore_state (void *pc_ptr)
 #define HELPER_LD(name, insn, type)                                     \
 static inline type do_##name(target_ulong addr, int mem_idx)            \
 {                                                                       \
-    return (type) insn##_raw(addr);                                     \
+    return (type) cpu_##insn##_raw(env, addr);                                     \
 }
 #else
 #define HELPER_LD(name, insn, type)                                     \
@@ -78,10 +137,10 @@ static inline type do_##name(target_ulong addr, int mem_idx)            \
 {                                                                       \
     switch (mem_idx)                                                    \
     {                                                                   \
-    case 0: return (type) insn##_kernel(addr); break;                   \
-    case 1: return (type) insn##_super(addr); break;                    \
+    case 0: return (type) cpu_##insn##_kernel(env, addr); break;                   \
+    case 1: return (type) cpu_##insn##_super(env, addr); break;                    \
     default:                                                            \
-    case 2: return (type) insn##_user(addr); break;                     \
+    case 2: return (type) cpu_##insn##_user(env, addr); break;                     \
     }                                                                   \
 }
 #endif
@@ -96,7 +155,7 @@ HELPER_LD(ld, ldq, int64_t)
 #define HELPER_ST(name, insn, type)                                     \
 static inline void do_##name(target_ulong addr, type val, int mem_idx)  \
 {                                                                       \
-    insn##_raw(addr, val);                                              \
+    cpu_##insn##_raw(env, addr, val);                                              \
 }
 #else
 #define HELPER_ST(name, insn, type)                                     \
@@ -104,10 +163,10 @@ static inline void do_##name(target_ulong addr, type val, int mem_idx)  \
 {                                                                       \
     switch (mem_idx)                                                    \
     {                                                                   \
-    case 0: insn##_kernel(addr, val); break;                            \
-    case 1: insn##_super(addr, val); break;                             \
+    case 0: cpu_##insn##_kernel(env, addr, val); break;                            \
+    case 1: cpu_##insn##_super(env, addr, val); break;                             \
     default:                                                            \
-    case 2: insn##_user(addr, val); break;                              \
+    case 2: cpu_##insn##_user(env, addr, val); break;                              \
     }                                                                   \
 }
 #endif
@@ -1902,7 +1961,7 @@ static void do_unaligned_access (target_ulong addr, int is_write, int is_user, v
     helper_raise_exception ((is_write == 1) ? EXCP_AdES : EXCP_AdEL);
 }
 
-void tlb_fill (target_ulong addr, int is_write, int mmu_idx, void *retaddr)
+void tlb_fill (CPUMIPSState* env1, target_ulong addr, int is_write, int mmu_idx, void *retaddr)
 {
     TranslationBlock *tb;
     CPUMIPSState *saved_env;
@@ -1912,8 +1971,8 @@ void tlb_fill (target_ulong addr, int is_write, int mmu_idx, void *retaddr)
     /* XXX: hack to restore env in all cases, even if not called from
        generated code */
     saved_env = env;
-    env = cpu_single_env;
-    ret = cpu_mips_handle_mmu_fault(env, addr, is_write, mmu_idx, 1);
+    env = env1;
+    ret = cpu_mips_handle_mmu_fault(env, addr, is_write, mmu_idx);
     if (ret) {
         if (retaddr) {
             /* now we have a real cpu fault */
@@ -1930,9 +1989,11 @@ void tlb_fill (target_ulong addr, int is_write, int mmu_idx, void *retaddr)
     env = saved_env;
 }
 
-void do_unassigned_access(hwaddr addr, int is_write, int is_exec,
-                          int unused, int size)
+void cpu_unassigned_access(CPUMIPSState* env1, hwaddr addr,
+                           int is_write, int is_exec, int unused, int size)
 {
+    env = env1;
+
     if (is_exec)
         helper_raise_exception(EXCP_IBE);
     else
@@ -1957,7 +2018,7 @@ redo:
     } else {
         /* the page is not in the TLB : fill it */
         retaddr = GETPC();
-        tlb_fill(addr, 0, is_user, retaddr);
+        tlb_fill(env, addr, 0, is_user, retaddr);
         goto redo;
     }
     return physaddr;

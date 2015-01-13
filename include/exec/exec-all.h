@@ -46,7 +46,8 @@ struct TranslationBlock;
 typedef struct TranslationBlock TranslationBlock;
 
 /* XXX: make safe guess about sizes */
-#define MAX_OP_PER_INSTR 96
+#define MAX_OP_PER_INSTR 208
+
 /* A Call op needs up to 6 + 2N parameters (N = number of arguments).  */
 #define MAX_OPC_PARAM 10
 #define OPC_BUF_SIZE 2048
@@ -84,19 +85,15 @@ void QEMU_NORETURN cpu_loop_exit(CPUArchState *env1);
 int page_unprotect(target_ulong address, uintptr_t pc, void *puc);
 void tb_invalidate_phys_page_range(tb_page_addr_t start, tb_page_addr_t end,
                                    int is_cpu_write_access);
-void tb_invalidate_page_range(target_ulong start, target_ulong end);
 void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t end,
                               int is_cpu_write_access);
 #if !defined(CONFIG_USER_ONLY)
 /* cputlb.c */
 void tlb_flush_page(CPUArchState *env, target_ulong addr);
 void tlb_flush(CPUArchState *env, int flush_global);
-int tlb_set_page_exec(CPUArchState *env, target_ulong vaddr,
-                      hwaddr paddr, int prot,
-                      int mmu_idx, int is_softmmu);
-int tlb_set_page(CPUArchState *env1, target_ulong vaddr,
-                 hwaddr paddr, int prot,
-                 int mmu_idx, int is_softmmu);
+void tlb_set_page(CPUArchState *env, target_ulong vaddr,
+                  hwaddr paddr, int prot,
+                  int mmu_idx, target_ulong size);
 void tb_reset_jump_recursive(TranslationBlock *tb);
 void tb_invalidate_phys_addr(hwaddr addr);
 #else
@@ -175,7 +172,7 @@ struct TranslationBlock {
     struct TranslationBlock *jmp_first;
     uint32_t icount;
 
-#ifdef CONFIG_MEMCHECK
+#ifdef CONFIG_ANDROID_MEMCHECK
     /* Maps PCs in this translation block to corresponding PCs in guest address
      * space. The array is arranged in such way, that every even entry contains
      * PC in the translation block, followed by an odd entry that contains
@@ -185,7 +182,7 @@ struct TranslationBlock {
     uintptr_t*   tpc2gpc;
     /* Number of pairs (pc_tb, pc_guest) in tpc2gpc array. */
     unsigned int    tpc2gpc_pairs;
-#endif  // CONFIG_MEMCHECK
+#endif  // CONFIG_ANDROID_MEMCHECK
 };
 
 #include "exec/spinlock.h"
@@ -227,7 +224,7 @@ static inline unsigned int tb_phys_hash_func(tb_page_addr_t pc)
     return (pc >> 2) & (CODE_GEN_PHYS_HASH_SIZE - 1);
 }
 
-#ifdef CONFIG_MEMCHECK
+#ifdef CONFIG_ANDROID_MEMCHECK
 /* Gets translated PC for a given (translated PC, guest PC) pair.
  * Return:
  *  Translated PC, or NULL if pair index was too large.
@@ -279,7 +276,7 @@ tb_search_guest_pc_from_tb_pc(const TranslationBlock* tb, target_ulong tb_pc)
     }
     return 0;
 }
-#endif  // CONFIG_MEMCHECK
+#endif  // CONFIG_ANDROID_MEMCHECK
 
 void tb_free(TranslationBlock *tb);
 void tb_flush(CPUArchState *env);
@@ -407,11 +404,23 @@ void phys_mem_set_alloc(void *(*alloc)(size_t));
 
 TranslationBlock *tb_find_pc(uintptr_t pc_ptr);
 
+/* The return address may point to the start of the next instruction.
+   Subtracting one gets us the call instruction itself.  */
+#if defined(__s390__) && !defined(__s390x__)
+# define GETPC() ((void*)(((uintptr_t)__builtin_return_address(0) & 0x7fffffffUL) - 1))
+#elif defined(__arm__)
+/* Thumb return addresses have the low bit set, so we need to subtract two.
+   This is still safe in ARM mode because instructions are 4 bytes.  */
+# define GETPC() ((void *)((uintptr_t)__builtin_return_address(0) - 2))
+#else
+# define GETPC() ((void *)((uintptr_t)__builtin_return_address(0) - 1))
+#endif
+
 extern CPUWriteMemoryFunc *io_mem_write[IO_MEM_NB_ENTRIES][4];
 extern CPUReadMemoryFunc *io_mem_read[IO_MEM_NB_ENTRIES][4];
 extern void *io_mem_opaque[IO_MEM_NB_ENTRIES];
 
-void tlb_fill(target_ulong addr, int is_write, int mmu_idx,
+void tlb_fill(CPUArchState* env, target_ulong addr, int is_write, int mmu_idx,
               void *retaddr);
 
 #include "exec/softmmu_defs.h"
@@ -444,32 +453,7 @@ static inline tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong
     return addr;
 }
 #else
-/* NOTE: this function can trigger an exception */
-/* NOTE2: the returned address is not exactly the physical address: it
-   is the offset relative to phys_ram_base */
-static inline tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong addr)
-{
-    int mmu_idx, page_index, pd;
-    void *p;
-
-    page_index = (addr >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
-    mmu_idx = cpu_mmu_index(env1);
-    if (unlikely(env1->tlb_table[mmu_idx][page_index].addr_code !=
-                 (addr & TARGET_PAGE_MASK))) {
-        ldub_code(addr);
-    }
-    pd = env1->tlb_table[mmu_idx][page_index].addr_code & ~TARGET_PAGE_MASK;
-    if (pd > IO_MEM_ROM && !(pd & IO_MEM_ROMD)) {
-#if defined(TARGET_SPARC) || defined(TARGET_MIPS)
-        do_unassigned_access(addr, 0, 1, 0, 4);
-#else
-        cpu_abort(env1, "Trying to execute code outside RAM or ROM at 0x" TARGET_FMT_lx "\n", addr);
-#endif
-    }
-    p = (void *)(uintptr_t)addr
-        + env1->tlb_table[mmu_idx][page_index].addend;
-    return qemu_ram_addr_from_host_nofail(p);
-}
+tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong addr);
 #endif
 
 typedef void (CPUDebugExcpHandler)(CPUArchState *env);
