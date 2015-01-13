@@ -90,6 +90,11 @@ ifeq ($(HOST_OS),linux)
 EMULATOR_COMMON_CFLAGS += -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
 endif
 
+ifeq (true,$(BUILD_DEBUG_EMULATOR))
+    EMULATOR_COMMON_CFLAGS += -DENABLE_DLOG=1
+else
+    EMULATOR_COMMON_CFLAGS += -DENABLE_DLOG=0
+endif
 
 ###########################################################
 # Zlib sources
@@ -122,18 +127,23 @@ common_LOCAL_SRC_FILES += \
 	android/base/async/AsyncReader.cpp \
 	android/base/async/AsyncWriter.cpp \
 	android/base/async/Looper.cpp \
+	android/base/async/ThreadLooper.cpp \
 	android/base/containers/PodVector.cpp \
 	android/base/containers/PointerSet.cpp \
 	android/base/containers/HashUtils.cpp \
 	android/base/containers/StringVector.cpp \
 	android/base/files/PathUtils.cpp \
+	android/base/misc/HttpUtils.cpp \
+	android/base/misc/Utf8Utils.cpp \
 	android/base/sockets/SocketDrainer.cpp \
 	android/base/sockets/SocketUtils.cpp \
 	android/base/sockets/SocketWaiter.cpp \
 	android/base/Log.cpp \
+	android/base/memory/LazyInstance.cpp \
 	android/base/String.cpp \
 	android/base/StringFormat.cpp \
 	android/base/StringView.cpp \
+	android/base/threads/ThreadStore.cpp \
 	android/emulation/CpuAccelerator.cpp \
 	android/filesystems/ext4_utils.cpp \
 	android/filesystems/fstab_parser.cpp \
@@ -154,6 +164,7 @@ common_LOCAL_SRC_FILES += \
 	android/utils/file_data.c \
 	android/utils/format.cpp \
 	android/utils/host_bitness.c \
+	android/utils/http_utils.cpp \
 	android/utils/ini.c \
 	android/utils/intmap.c \
 	android/utils/lineinput.c \
@@ -170,8 +181,15 @@ common_LOCAL_SRC_FILES += \
 	android/utils/system.c \
 	android/utils/tempfile.c \
 	android/utils/uncompress.cpp \
+	android/utils/utf8_utils.cpp \
 	android/utils/vector.c \
 	android/utils/win32_cmdline_quote.c \
+
+ifeq (windows,$(HOST_OS))
+common_LOCAL_SRC_FILES += android/base/threads/Thread_win32.cpp
+else
+common_LOCAL_SRC_FILES += android/base/threads/Thread_pthread.cpp
+endif
 
 common_LOCAL_CFLAGS += $(EMULATOR_COMMON_CFLAGS)
 
