@@ -8299,7 +8299,7 @@ gen_intermediate_code_internal (CPUMIPSState *env, TranslationBlock *tb,
     gen_opc_end = tcg_ctx.gen_opc_buf + OPC_MAX_SIZE;
     ctx.pc = pc_start;
     ctx.saved_pc = -1;
-    ctx.singlestep_enabled = env->singlestep_enabled;
+    ctx.singlestep_enabled = ENV_GET_CPU(env)->singlestep_enabled;
     ctx.tb = tb;
     ctx.bstate = BS_NONE;
     /* Restore delay slot state from the tb context.  */
@@ -8317,7 +8317,7 @@ gen_intermediate_code_internal (CPUMIPSState *env, TranslationBlock *tb,
 #ifdef DEBUG_DISAS
     qemu_log_mask(CPU_LOG_TB_CPU, "------------------------------------------------\n");
     /* FIXME: This may print out stale hflags from env... */
-    log_cpu_state_mask(CPU_LOG_TB_CPU, env, 0);
+    log_cpu_state_mask(CPU_LOG_TB_CPU, ENV_GET_CPU(env), 0);
 #endif
     LOG_DISAS("\ntb %p idx %d hflags %04x\n", tb, ctx.mem_idx, ctx.hflags);
     gen_icount_start();
@@ -8359,7 +8359,7 @@ gen_intermediate_code_internal (CPUMIPSState *env, TranslationBlock *tb,
            This is what GDB expects and is consistent with what the
            hardware does (e.g. if a delay slot instruction faults, the
            reported PC is the PC of the branch).  */
-        if (env->singlestep_enabled && (ctx.hflags & MIPS_HFLAG_BMASK) == 0)
+        if (ENV_GET_CPU(env)->singlestep_enabled && (ctx.hflags & MIPS_HFLAG_BMASK) == 0)
             break;
 
         /* Do not split a branch instruction and its delay slot into two
@@ -8379,7 +8379,7 @@ gen_intermediate_code_internal (CPUMIPSState *env, TranslationBlock *tb,
     }
     if (tb->cflags & CF_LAST_IO)
         gen_io_end();
-    if (env->singlestep_enabled && ctx.bstate != BS_BRANCH) {
+    if (ENV_GET_CPU(env)->singlestep_enabled && ctx.bstate != BS_BRANCH) {
         save_cpu_state(&ctx, ctx.bstate == BS_NONE);
         gen_helper_1i(raise_exception, cpu_env, EXCP_DEBUG);
     } else {
@@ -8503,10 +8503,11 @@ cpu_mips_check_sign_extensions (CPUMIPSState *env, FILE *f,
 }
 #endif
 
-void cpu_dump_state (CPUMIPSState *env, FILE *f,
+void cpu_dump_state (CPUState *cpu, FILE *f,
                      int (*cpu_fprintf)(FILE *f, const char *fmt, ...),
                      int flags)
 {
+    CPUMIPSState *env = cpu->env_ptr;
     int i;
 
     cpu_fprintf(f, "pc=0x" TARGET_FMT_lx " HI=0x" TARGET_FMT_lx " LO=0x" TARGET_FMT_lx " ds %04x " TARGET_FMT_lx " %d\n",
@@ -8582,15 +8583,21 @@ static void mips_tcg_init(void)
 
 CPUMIPSState *cpu_mips_init (const char *cpu_model)
 {
+    MIPSCPU *mips_cpu;
     CPUMIPSState *env;
+    CPUState *cpu;
     const mips_def_t *def;
 
     def = cpu_mips_find_by_name(cpu_model);
     if (!def)
         return NULL;
-    env = g_malloc0(sizeof(CPUMIPSState));
+    mips_cpu = g_malloc0(sizeof(MIPSCPU));
+    env = &mips_cpu->env;
+    ENV_GET_CPU(env)->env_ptr = env;
+
+    cpu = ENV_GET_CPU(env);
     env->cpu_model = def;
-    env->cpu_model_str = cpu_model;
+    cpu->cpu_model_str = cpu_model;
 
     cpu_exec_init(env);
 #ifndef CONFIG_USER_ONLY
@@ -8598,16 +8605,18 @@ CPUMIPSState *cpu_mips_init (const char *cpu_model)
 #endif
     mvp_init(env, def);
     mips_tcg_init();
-    cpu_reset(env);
-    qemu_init_vcpu(env);
+    cpu_reset(cpu);
+    qemu_init_vcpu(cpu);
     return env;
 }
 
-void cpu_reset (CPUMIPSState *env)
+void cpu_reset(CPUState *cpu)
 {
+    CPUMIPSState *env = cpu->env_ptr;
+
     if (qemu_loglevel_mask(CPU_LOG_RESET)) {
-        qemu_log("CPU Reset (CPU %d)\n", env->cpu_index);
-        log_cpu_state(env, 0);
+        qemu_log("CPU Reset (CPU %d)\n", cpu->cpu_index);
+        log_cpu_state(cpu, 0);
     }
 
     memset(env, 0, offsetof(CPUMIPSState, breakpoints));

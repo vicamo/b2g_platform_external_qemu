@@ -67,7 +67,6 @@ HW_SOURCES := \
     bt/l2cap.c \
     bt/remote.c \
     bt/sdp.c \
-    block/cdrom.c \
     core/irq.c \
     core/qdev.c \
     core/sysbus.c \
@@ -79,7 +78,6 @@ HW_SOURCES := \
     android/goldfish/fb.c \
     android/goldfish/battery.c \
     android/goldfish/mmc.c   \
-    android/goldfish/memlog.c \
     android/goldfish/nand.c \
     android/goldfish/nfc.c \
     android/goldfish/pipe.c \
@@ -97,12 +95,6 @@ HW_SOURCES := \
     nfc/snep.c \
     nfc/tag.c \
     pci/pci.c \
-    scsi/scsi-disk.c \
-    usb/dev-hid.c \
-    usb/dev-hub.c \
-    usb/dev-storage.c \
-    usb/hcd-ohci.c \
-    usb/core.c \
     watchdog/watchdog.c
 
 
@@ -112,7 +104,6 @@ HW_SOURCES += \
     arm/pic.c \
     arm/boot.c \
     android/goldfish/interrupt.c \
-    android/goldfish/switch.c \
     android/goldfish/timer.c \
     android/goldfish/trace.c \
 
@@ -158,7 +149,6 @@ HW_SOURCES += \
     android/android_mips.c \
     mips/mips_pic.c \
     android/goldfish/interrupt.c \
-    android/goldfish/switch.c \
     android/goldfish/timer.c \
     android/goldfish/trace.c \
     mips/cputimer.c \
@@ -189,7 +179,6 @@ common_LOCAL_SRC_FILES += \
     memory-android.c \
     monitor-android.c \
     translate-all.c \
-    android/varint.c \
 
 ##############################################################################
 # CPU-specific emulation.
@@ -216,7 +205,15 @@ endif  # EMULATOR_TARGET_ARCH == arm
 
 ifeq ($(EMULATOR_TARGET_ARCH), x86)
 common_LOCAL_SRC_FILES += \
-    target-i386/op_helper.c \
+    target-i386/cc_helper.c \
+    target-i386/excp_helper.c \
+    target-i386/fpu_helper.c \
+    target-i386/int_helper.c \
+    target-i386/mem_helper.c \
+    target-i386/misc_helper.c \
+    target-i386/seg_helper.c \
+    target-i386/smm_helper.c \
+    target-i386/svm_helper.c \
     target-i386/helper.c \
     target-i386/translate.c \
     target-i386/machine.c \

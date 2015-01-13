@@ -265,68 +265,6 @@ static int glue(compute_all_mul, SUFFIX)(CPUX86State *env)
     return cf | pf | af | zf | sf | of;
 }
 
-/* shifts */
-
-target_ulong glue(helper_rcl, SUFFIX)(CPUX86State *env,
-                                      target_ulong t0, target_ulong t1)
-{
-    int count, eflags;
-    target_ulong src;
-    target_long res;
-
-    count = t1 & SHIFT1_MASK;
-#if DATA_BITS == 16
-    count = rclw_table[count];
-#elif DATA_BITS == 8
-    count = rclb_table[count];
-#endif
-    if (count) {
-        eflags = helper_cc_compute_all(env, CC_OP);
-        t0 &= DATA_MASK;
-        src = t0;
-        res = (t0 << count) | ((target_ulong)(eflags & CC_C) << (count - 1));
-        if (count > 1)
-            res |= t0 >> (DATA_BITS + 1 - count);
-        t0 = res;
-        env->cc_tmp = (eflags & ~(CC_C | CC_O)) |
-            (lshift(src ^ t0, 11 - (DATA_BITS - 1)) & CC_O) |
-            ((src >> (DATA_BITS - count)) & CC_C);
-    } else {
-        env->cc_tmp = -1;
-    }
-    return t0;
-}
-
-target_ulong glue(helper_rcr, SUFFIX)(CPUX86State *env,
-                                      target_ulong t0, target_ulong t1)
-{
-    int count, eflags;
-    target_ulong src;
-    target_long res;
-
-    count = t1 & SHIFT1_MASK;
-#if DATA_BITS == 16
-    count = rclw_table[count];
-#elif DATA_BITS == 8
-    count = rclb_table[count];
-#endif
-    if (count) {
-        eflags = helper_cc_compute_all(env, CC_OP);
-        t0 &= DATA_MASK;
-        src = t0;
-        res = (t0 >> count) | ((target_ulong)(eflags & CC_C) << (DATA_BITS - count));
-        if (count > 1)
-            res |= t0 << (DATA_BITS + 1 - count);
-        t0 = res;
-        env->cc_tmp = (eflags & ~(CC_C | CC_O)) |
-            (lshift(src ^ t0, 11 - (DATA_BITS - 1)) & CC_O) |
-            ((src >> (count - 1)) & CC_C);
-    } else {
-        env->cc_tmp = -1;
-    }
-    return t0;
-}
-
 #undef DATA_BITS
 #undef SHIFT_MASK
 #undef SHIFT1_MASK

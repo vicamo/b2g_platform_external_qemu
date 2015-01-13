@@ -293,13 +293,14 @@ static void cpu_reset_model_id(CPUARMState *env, uint32_t id)
     }
 }
 
-void cpu_reset(CPUARMState *env)
+void cpu_reset(CPUState *cpu)
 {
+    CPUARMState *env = cpu->env_ptr;
     uint32_t id;
 
     if (qemu_loglevel_mask(CPU_LOG_RESET)) {
-        qemu_log("CPU Reset (CPU %d)\n", env->cpu_index);
-        log_cpu_state(env, 0);
+        qemu_log("CPU Reset (CPU %d)\n", cpu->cpu_index);
+        log_cpu_state(cpu, 0);
     }
 
     id = env->cp15.c0_cpuid;
@@ -413,6 +414,7 @@ static int vfp_gdb_set_reg(CPUARMState *env, uint8_t *buf, int reg)
 
 CPUARMState *cpu_arm_init(const char *cpu_model)
 {
+    ARMCPU *arm_cpu;
     CPUARMState *env;
     uint32_t id;
     static int inited = 0;
@@ -420,27 +422,31 @@ CPUARMState *cpu_arm_init(const char *cpu_model)
     id = cpu_arm_find_by_name(cpu_model);
     if (id == 0)
         return NULL;
-    env = g_malloc0(sizeof(CPUARMState));
+    arm_cpu = g_malloc0(sizeof(ARMCPU));
+    env = &arm_cpu->env;
+    ENV_GET_CPU(env)->env_ptr = env;
+
+    CPUState *cpu = ENV_GET_CPU(env);
     cpu_exec_init(env);
     if (!inited) {
         inited = 1;
         arm_translate_init();
     }
 
-    env->cpu_model_str = cpu_model;
+    cpu->cpu_model_str = cpu_model;
     env->cp15.c0_cpuid = id;
-    cpu_reset(env);
+    cpu_reset(cpu);
     if (arm_feature(env, ARM_FEATURE_NEON)) {
-        gdb_register_coprocessor(env, vfp_gdb_get_reg, vfp_gdb_set_reg,
+        gdb_register_coprocessor(cpu, vfp_gdb_get_reg, vfp_gdb_set_reg,
                                  51, "arm-neon.xml", 0);
     } else if (arm_feature(env, ARM_FEATURE_VFP3)) {
-        gdb_register_coprocessor(env, vfp_gdb_get_reg, vfp_gdb_set_reg,
+        gdb_register_coprocessor(cpu, vfp_gdb_get_reg, vfp_gdb_set_reg,
                                  35, "arm-vfp3.xml", 0);
     } else if (arm_feature(env, ARM_FEATURE_VFP)) {
-        gdb_register_coprocessor(env, vfp_gdb_get_reg, vfp_gdb_set_reg,
+        gdb_register_coprocessor(cpu, vfp_gdb_get_reg, vfp_gdb_set_reg,
                                  19, "arm-vfp.xml", 0);
     }
-    qemu_init_vcpu(env);
+    qemu_init_vcpu(cpu);
     return env;
 }
 
@@ -992,7 +998,7 @@ void do_interrupt(CPUARMState *env)
     }
     env->regs[14] = env->regs[15] + offset;
     env->regs[15] = addr;
-    env->interrupt_request |= CPU_INTERRUPT_EXITTB;
+    ENV_GET_CPU(env)->interrupt_request |= CPU_INTERRUPT_EXITTB;
 }
 
 /* Check section/page access permissions.
@@ -1863,7 +1869,7 @@ void HELPER(set_cp15)(CPUARMState *env, uint32_t insn, uint32_t val)
                 env->cp15.c15_threadid = val & 0xffff;
                 break;
             case 8: /* Wait-for-interrupt (deprecated).  */
-                cpu_interrupt(env, CPU_INTERRUPT_HALT);
+                cpu_interrupt(ENV_GET_CPU(env), CPU_INTERRUPT_HALT);
                 break;
             default:
                 goto bad_reg;
@@ -1909,7 +1915,7 @@ uint32_t HELPER(get_cp15)(CPUARMState *env, uint32_t insn)
                      */
                     if (arm_feature(env, ARM_FEATURE_V7) ||
                         ARM_CPUID(env) == ARM_CPUID_ARM11MPCORE) {
-                        int mpidr = env->cpu_index;
+                        int mpidr = ENV_GET_CPU(env)->cpu_index;
                         /* We don't support setting cluster ID ([8..11])
                          * so these bits always RAZ.
                          */

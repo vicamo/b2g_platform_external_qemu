@@ -40,6 +40,7 @@
 #include "hw/qdev.h"
 #include "hw/xen/xen.h"
 #include "qemu/osdep.h"
+#include "qemu/tls.h"
 #include "sysemu/kvm.h"
 #include "exec/cputlb.h"
 #include "exec/hax.h"
@@ -60,10 +61,9 @@ static int in_migration;
 RAMList ram_list = { .blocks = QTAILQ_HEAD_INITIALIZER(ram_list.blocks) };
 #endif
 
-CPUArchState *first_cpu;
-/* current CPU in the current thread. It is only valid inside
-   cpu_exec() */
-CPUArchState *cpu_single_env;
+struct CPUTailQ cpus = QTAILQ_HEAD_INITIALIZER(cpus);
+DEFINE_TLS(CPUState *, current_cpu);
+
 /* 0 = Do not count executed instructions.
    1 = Precise instruction counting.
    2 = Adaptive rate instruction counting.  */
@@ -125,65 +125,64 @@ void cpu_exec_init_all(unsigned long tb_size)
 static void cpu_common_save(QEMUFile *f, void *opaque)
 {
     CPUOldState *env = opaque;
+    CPUState *cpu = ENV_GET_CPU(env);
 
-    cpu_synchronize_state(env, 0);
+    cpu_synchronize_state(cpu, 0);
 
-    qemu_put_be32s(f, &env->halted);
-    qemu_put_be32s(f, &env->interrupt_request);
+    qemu_put_be32s(f, &cpu->halted);
+    qemu_put_be32s(f, &cpu->interrupt_request);
 }
 
 static int cpu_common_load(QEMUFile *f, void *opaque, int version_id)
 {
     CPUOldState *env = opaque;
+    CPUState *cpu = ENV_GET_CPU(env);
 
     if (version_id != CPU_COMMON_SAVE_VERSION)
         return -EINVAL;
 
-    qemu_get_be32s(f, &env->halted);
-    qemu_get_be32s(f, &env->interrupt_request);
+    qemu_get_be32s(f, &cpu->halted);
+    qemu_get_be32s(f, &cpu->interrupt_request);
     /* 0x01 was CPU_INTERRUPT_EXIT. This line can be removed when the
        version_id is increased. */
-    env->interrupt_request &= ~0x01;
+    cpu->interrupt_request &= ~0x01;
     tlb_flush(env, 1);
-    cpu_synchronize_state(env, 1);
+    cpu_synchronize_state(cpu, 1);
 
     return 0;
 }
 #endif
 
-CPUArchState *qemu_get_cpu(int cpu)
+CPUState *qemu_get_cpu(int cpu_index)
 {
-    CPUArchState *env = first_cpu;
+    CPUState *cpu;
 
-    while (env) {
-        if (env->cpu_index == cpu)
-            break;
-        env = env->next_cpu;
+    CPU_FOREACH(cpu) {
+        if (cpu->cpu_index == cpu_index)
+            return cpu;
     }
-
-    return env;
+    return NULL;
 }
 
 void cpu_exec_init(CPUArchState *env)
 {
-    CPUArchState **penv;
-    int cpu_index;
+    CPUState *cpu = ENV_GET_CPU(env);
 
 #if defined(CONFIG_USER_ONLY)
     cpu_list_lock();
 #endif
-    env->next_cpu = NULL;
-    penv = &first_cpu;
-    cpu_index = 0;
-    while (*penv != NULL) {
-        penv = &(*penv)->next_cpu;
+    // Compute CPU index from list position.
+    int cpu_index = 0;
+    CPUState *cpu1;
+    CPU_FOREACH(cpu1) {
         cpu_index++;
     }
-    env->cpu_index = cpu_index;
-    env->numa_node = 0;
+    cpu->cpu_index = cpu_index;
+    QTAILQ_INSERT_TAIL(&cpus, cpu, node);
+
+    cpu->numa_node = 0;
     QTAILQ_INIT(&env->breakpoints);
     QTAILQ_INIT(&env->watchpoints);
-    *penv = env;
 #if defined(CONFIG_USER_ONLY)
     cpu_list_unlock();
 #endif
@@ -384,17 +383,17 @@ void cpu_breakpoint_remove_all(CPUArchState *env, int mask)
 
 /* enable or disable single step mode. EXCP_DEBUG is returned by the
    CPU loop after each instruction */
-void cpu_single_step(CPUOldState *env, int enabled)
+void cpu_single_step(CPUState *cpu, int enabled)
 {
 #if defined(TARGET_HAS_ICE)
-    if (env->singlestep_enabled != enabled) {
-        env->singlestep_enabled = enabled;
+    if (cpu->singlestep_enabled != enabled) {
+        cpu->singlestep_enabled = enabled;
         if (kvm_enabled()) {
-            kvm_update_guest_debug(env, 0);
+            kvm_update_guest_debug(cpu->env_ptr, 0);
         } else {
             /* must flush all the translated code to avoid inconsistencies */
             /* XXX: only flush what is necessary */
-            tb_flush(env);
+            tb_flush(cpu->env_ptr);
         }
     }
 #endif
@@ -458,19 +457,21 @@ void cpu_unlink_tb(CPUOldState *env)
     spin_unlock(&interrupt_lock);
 }
 
-void cpu_reset_interrupt(CPUOldState *env, int mask)
+void cpu_reset_interrupt(CPUState *cpu, int mask)
 {
-    env->interrupt_request &= ~mask;
+    cpu->interrupt_request &= ~mask;
 }
 
-void cpu_exit(CPUOldState *env)
+void cpu_exit(CPUState *cpu)
 {
-    env->exit_request = 1;
-    cpu_unlink_tb(env);
+    cpu->exit_request = 1;
+    cpu_unlink_tb(cpu->env_ptr);
 }
 
 void cpu_abort(CPUArchState *env, const char *fmt, ...)
 {
+    CPUState *cpu = ENV_GET_CPU(env);
+
     va_list ap;
     va_list ap2;
 
@@ -480,18 +481,18 @@ void cpu_abort(CPUArchState *env, const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
 #ifdef TARGET_I386
-    cpu_dump_state(env, stderr, fprintf, X86_DUMP_FPU | X86_DUMP_CCOP);
+    cpu_dump_state(cpu, stderr, fprintf, X86_DUMP_FPU | X86_DUMP_CCOP);
 #else
-    cpu_dump_state(env, stderr, fprintf, 0);
+    cpu_dump_state(cpu, stderr, fprintf, 0);
 #endif
     if (qemu_log_enabled()) {
         qemu_log("qemu: fatal: ");
         qemu_log_vprintf(fmt, ap2);
         qemu_log("\n");
 #ifdef TARGET_I386
-        log_cpu_state(env, X86_DUMP_FPU | X86_DUMP_CCOP);
+        log_cpu_state(cpu, X86_DUMP_FPU | X86_DUMP_CCOP);
 #else
-        log_cpu_state(env, 0);
+        log_cpu_state(cpu, 0);
 #endif
         qemu_log_flush();
         qemu_log_close();
@@ -537,7 +538,6 @@ found:
 void cpu_physical_memory_reset_dirty(ram_addr_t start, ram_addr_t end,
                                      int dirty_flags)
 {
-    CPUOldState *env;
     unsigned long length, start1;
     int i;
 
@@ -559,12 +559,15 @@ void cpu_physical_memory_reset_dirty(ram_addr_t start, ram_addr_t end,
         abort();
     }
 
-    for(env = first_cpu; env != NULL; env = env->next_cpu) {
+    CPUState *cpu;
+    CPU_FOREACH(cpu) {
         int mmu_idx;
         for (mmu_idx = 0; mmu_idx < NB_MMU_MODES; mmu_idx++) {
-            for(i = 0; i < CPU_TLB_SIZE; i++)
+            for(i = 0; i < CPU_TLB_SIZE; i++) {
+                CPUArchState* env = cpu->env_ptr;
                 tlb_reset_dirty_range(&env->tlb_table[mmu_idx][i],
                                       start1, length);
+            }
         }
     }
 }
@@ -698,7 +701,7 @@ void cpu_register_physical_memory_log(hwaddr start_addr,
 {
     hwaddr addr, end_addr;
     PhysPageDesc *p;
-    CPUOldState *env;
+    CPUState *cpu;
     ram_addr_t orig_size = size;
     subpage_t *subpage;
 
@@ -775,8 +778,8 @@ void cpu_register_physical_memory_log(hwaddr start_addr,
     /* since each CPU stores ram addresses in its TLB cache, we must
        reset the modified entries */
     /* XXX: slow ! */
-    for(env = first_cpu; env != NULL; env = env->next_cpu) {
-        tlb_flush(env, 1);
+    CPU_FOREACH(cpu) {
+        tlb_flush(cpu->env_ptr, 1);
     }
 }
 
@@ -1140,6 +1143,15 @@ ram_addr_t qemu_ram_alloc_from_ptr(DeviceState *dev, const char *name,
     }
     new_block->length = size;
 
+    if (dev) {
+        char *id = qdev_get_dev_path(dev);
+        if (id) {
+            snprintf(new_block->idstr, sizeof(new_block->idstr), "%s/", id);
+            g_free(id);
+        }
+    }
+    pstrcat(new_block->idstr, sizeof(new_block->idstr), name);
+
     /* Keep the list sorted from biggest to smallest block.  */
     QTAILQ_FOREACH(block, &ram_list.blocks, next) {
         if (block->length < new_block->length) {
@@ -1165,7 +1177,7 @@ ram_addr_t qemu_ram_alloc_from_ptr(DeviceState *dev, const char *name,
     //qemu_ram_setup_dump(new_block->host, size);
     //qemu_madvise(new_block->host, size, QEMU_MADV_HUGEPAGE);
     //qemu_madvise(new_block->host, size, QEMU_MADV_DONTFORK);
-    
+
     if (kvm_enabled())
         kvm_setup_guest_memory(new_block->host, size);
 
@@ -1536,7 +1548,8 @@ static void tb_check_watchpoint(CPUArchState* env)
 /* Generate a debug exception if a watchpoint has been hit.  */
 static void check_watchpoint(int offset, int len_mask, int flags)
 {
-    CPUArchState *env = cpu_single_env;
+    CPUState *cpu = current_cpu;
+    CPUArchState *env = cpu->env_ptr;
     target_ulong pc, cs_base;
     target_ulong vaddr;
     CPUWatchpoint *wp;
@@ -1546,7 +1559,7 @@ static void check_watchpoint(int offset, int len_mask, int flags)
         /* We re-entered the check after replacing the TB. Now raise
          * the debug interrupt so that is will trigger after the
          * current instruction. */
-        cpu_interrupt(env, CPU_INTERRUPT_DEBUG);
+        cpu_interrupt(cpu, CPU_INTERRUPT_DEBUG);
         return;
     }
     vaddr = (env->mem_io_vaddr & TARGET_PAGE_MASK) + offset;
@@ -2633,13 +2646,14 @@ void stq_be_phys(hwaddr addr, uint64_t val)
 #endif
 
 /* virtual memory access for debug (includes writing to ROM) */
-int cpu_memory_rw_debug(CPUOldState *env, target_ulong addr,
+int cpu_memory_rw_debug(CPUState *cpu, target_ulong addr,
                         void *buf, int len, int is_write)
 {
     int l;
     hwaddr phys_addr;
     target_ulong page;
     uint8_t* buf8 = (uint8_t*)buf;
+    CPUArchState *env = cpu->env_ptr;
 
     while (len > 0) {
         page = addr & TARGET_PAGE_MASK;
