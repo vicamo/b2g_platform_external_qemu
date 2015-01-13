@@ -12,10 +12,13 @@
 #ifndef ANDROID_AVD_INFO_H
 #define ANDROID_AVD_INFO_H
 
+#include "android/utils/compiler.h"
 #include "android/utils/ini.h"
 #include "android/avd/hw-config.h"
 #include "android/config/config.h"
 #include "android/utils/file_data.h"
+
+ANDROID_BEGIN_HEADER
 
 /* An Android Virtual Device (AVD for short) corresponds to a
  * directory containing all kernel/disk images for a given virtual
@@ -229,6 +232,9 @@ void         avdInfo_getSkinInfo( AvdInfo*  i, char** pSkinName, char** pSkinDir
 /* Returns whether the AVD specifies the use of a dynamic skin */
 int          avdInfo_shouldUseDynamicSkin( AvdInfo* i);
 
+/* Returns the path that contains layout and assets for dynamic skin */
+char*        avdInfo_getDynamicSkinPath( AvdInfo* i);
+
 /* Find a charmap file named <charmapName>.kcm for this AVD.
  * Returns the path of the file on success, or NULL if not found.
  * The result string must be freed by the caller.
@@ -281,6 +287,6 @@ int          avdInfo_getAdbdCommunicationMode( AvdInfo* i );
 */
 int          avdInfo_getSnapshotPresent(AvdInfo* i);
 
-/* */
+ANDROID_END_HEADER
 
 #endif /* ANDROID_AVD_INFO_H */

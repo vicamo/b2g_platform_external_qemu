@@ -63,16 +63,12 @@
 #include "android/keycode-array.h"
 #include "android/charmap.h"
 #include "android/display-core.h"
-#include "android/protocol/fb-updates-proxy.h"
-#include "android/protocol/user-events-impl.h"
-#include "android/protocol/ui-commands-api.h"
-#include "android/protocol/core-commands-impl.h"
-#include "android/protocol/ui-commands-proxy.h"
-#include "android/protocol/attach-ui-proxy.h"
 
 #if defined(CONFIG_SLIRP)
 #include "libslirp.h"
 #endif
+
+extern void android_emulator_set_window_scale(double, int);
 
 #define  DEBUG  1
 
@@ -4734,7 +4730,7 @@ do_window_scale( ControlClient  client, char*  args )
         }
     }
 
-    uicmd_set_window_scale( scale, is_dpi );
+    android_emulator_set_window_scale(scale, is_dpi);
     return 0;
 }
 

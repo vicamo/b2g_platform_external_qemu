@@ -20,6 +20,7 @@ OPTION_TARGETS=""
 OPTION_DEBUG=no
 OPTION_IGNORE_AUDIO=no
 OPTION_NO_PREBUILTS=no
+OPTION_OUT_DIR=
 OPTION_HELP=no
 OPTION_STATIC=no
 OPTION_MINGW=no
@@ -58,6 +59,8 @@ for opt do
   ;;
   --no-strip) OPTION_NO_STRIP=yes
   ;;
+  --out-dir=*) OPTION_OUT_DIR=$optarg
+  ;;
   --ignore-audio) OPTION_IGNORE_AUDIO=yes
   ;;
   --no-prebuilts) OPTION_NO_PREBUILTS=yes
@@ -69,6 +72,9 @@ for opt do
   --no-gles) GLES_PROBE=no
   ;;
   --no-pcbios) PCBIOS_PROBE=no
+  ;;
+  --no-tests)
+  # Ignore this option, only used by android-rebuild.sh
   ;;
   --multisim=*) OPTION_MULTISIM=$optarg
   ;;
@@ -95,6 +101,7 @@ EOF
     echo "  --debug                  enable debug (-O0 -g) build"
     echo "  --ignore-audio           ignore audio messages (may build sound-less emulator)"
     echo "  --no-prebuilts           do not use prebuilt libraries and compiler"
+    echo "  --out-dir=<path>         use specific output directory [objs/]"
     echo "  --mingw                  build Windows executable on Linux"
     echo "  --static                 build a completely static executable"
     echo "  --verbose                verbose configuration"
@@ -102,17 +109,26 @@ EOF
     echo "  --gles-dir=PATH          specify path to GLES host emulation sources [auto-detected]"
     echo "  --no-gles                disable GLES emulation support"
     echo "  --no-pcbios              disable copying of PC Bios files"
+    echo "  --no-tests               don't run unit test suite"
     echo "  --multisim               the number of modem devices, default 1, max 9."
     echo ""
     exit 1
 fi
 
 # On Linux, try to use our prebuilt toolchain to generate binaries
-# that are compatible with Ubuntu 8.04
+# that are compatible with Ubuntu 10.4
 if [ -z "$CC" -a -z "$OPTION_CC" -a "$HOST_OS" = linux ] ; then
-    PROBE_HOST_CC=`dirname $0`/../../prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.11-4.6/bin/x86_64-linux-gcc
-    if [ ! -f "$PROBE_HOST_CC" ] ; then
-        PROBE_HOST_CC=`dirname $0`/../../prebuilts/tools/gcc-sdk/gcc
+    PREBUILTS_HOST_GCC=$(dirname $0)/../../prebuilts/gcc/linux-x86/host
+    # NOTE: GCC 4.8 is currently disabled because this breaks MIPS emulation
+    # For some odd reason. Remove the 'DISABLED_' prefix below to re-enable it,
+    # e.g. once the MIPS backend has been updated to a more recent version.
+    # This only affects Linux emulator binaries.
+    PROBE_HOST_CC=$PREBUILTS_HOST_GCC/DISABLED_x86_64-linux-glibc2.11-4.8/bin/x86_64-linux-gcc
+    if [ ! -f "$PROBE_HOST_CC" ]; then
+        PROBE_HOST_CC=$PREBUILTS_HOST_GCC/x86_64-linux-glibc2.11-4.6/bin/x86_64-linux-gcc
+        if [ ! -f "$PROBE_HOST_CC" ] ; then
+            PROBE_HOST_CC=$(dirname $0)/../../prebuilts/tools/gcc-sdk/gcc
+        fi
     fi
     if [ -f "$PROBE_HOST_CC" ] ; then
         echo "Using prebuilt toolchain: $PROBE_HOST_CC"
@@ -163,6 +179,14 @@ if [ "$OPTION_MINGW" = "yes" ] ; then
     TARGET_DLL_SUFFIX=.dll
 else
     enable_cygwin
+fi
+
+if [ "$OPTION_OUT_DIR" ]; then
+    OUT_DIR="$OPTION_OUT_DIR"
+    mkdir -p "$OUT_DIR" || panic "Could not create output directory: $OUT_DIR"
+else
+    OUT_DIR=objs
+    log "Auto-config: --out-dir=objs"
 fi
 
 # Are we running in the Android build system ?
@@ -258,10 +282,10 @@ if [ "$PCBIOS_PROBE" = "yes" ]; then
     if [ ! -d "$PCBIOS_DIR" ]; then
         log "PC Bios    : Could not find prebuilts directory."
     else
-        mkdir -p objs/lib/pc-bios
+        mkdir -p $OUT_DIR/lib/pc-bios
         for BIOS_FILE in bios.bin vgabios-cirrus.bin; do
             log "PC Bios    : Copying $BIOS_FILE"
-            cp -f $PCBIOS_DIR/$BIOS_FILE objs/lib/pc-bios/$BIOS_FILE
+            cp -f $PCBIOS_DIR/$BIOS_FILE $OUT_DIR/lib/pc-bios/$BIOS_FILE
         done
     fi
 fi
@@ -454,7 +478,7 @@ LDFLAGS=$ORG_LDFLAGS
 # create the objs directory that is going to contain all generated files
 # including the configuration ones
 #
-mkdir -p objs
+mkdir -p $OUT_DIR
 
 ###
 ###  Compiler probe
@@ -487,6 +511,16 @@ feature_check_header HAVE_BYTESWAP_H      "<byteswap.h>"
 feature_check_header HAVE_MACHINE_BSWAP_H "<machine/bswap.h>"
 feature_check_header HAVE_FNMATCH_H       "<fnmatch.h>"
 
+# check for Mingw version.
+MINGW_VERSION=
+if [ "$TARGET_OS" = "windows" ]; then
+log "Mingw      : Probing for GCC version."
+GCC_VERSION=$($CC -v 2>&1 | awk '$1 == "gcc" && $2 == "version" { print $3; }')
+GCC_MAJOR=$(echo "$GCC_VERSION" | cut -f1 -d.)
+GCC_MINOR=$(echo "$GCC_VERSION" | cut -f2 -d.)
+log "Mingw      : Found GCC version $GCC_MAJOR.$GCC_MINOR [$GCC_VERSION]"
+MINGW_GCC_VERSION=$(( $GCC_MAJOR * 100 + $GCC_MINOR ))
+fi
 # Build the config.make file
 #
 
@@ -532,7 +566,7 @@ if [ "$OPTION_DEBUG" != "yes" -a "$OPTION_NO_STRIP" != "yes" ]; then
     esac
 fi
 
-create_config_mk
+create_config_mk "$OUT_DIR"
 echo "" >> $config_mk
 echo "HOST_PREBUILT_TAG := $TARGET_OS" >> $config_mk
 echo "HOST_EXEEXT       := $TARGET_EXEEXT" >> $config_mk
@@ -583,6 +617,7 @@ if [ "$OPTION_MINGW" = "yes" ] ; then
     echo "" >> $config_mk
     echo "USE_MINGW := 1" >> $config_mk
     echo "HOST_OS   := windows" >> $config_mk
+    echo "HOST_MINGW_VERSION := $MINGW_GCC_VERSION" >> $config_mk
 fi
 
 if [ "$HOST_OS" = "darwin" ]; then
@@ -592,7 +627,7 @@ fi
 
 # Build the config-host.h file
 #
-config_h=objs/config-host.h
+config_h=$OUT_DIR/config-host.h
 cat > $config_h <<EOF
 /* This file was autogenerated by '$PROGNAME' */
 
