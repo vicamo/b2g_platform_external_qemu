@@ -25,7 +25,7 @@ OPTION_STATIC=no
 OPTION_MINGW=no
 OPTION_MULTISIM=1
 
-GLES_LIBS=
+GLES_DIR=
 GLES_SUPPORT=no
 GLES_PROBE=yes
 
@@ -64,8 +64,7 @@ for opt do
   ;;
   --static) OPTION_STATIC=yes
   ;;
-  --gles-libs=*) GLES_LIBS=$optarg
-  GLES_SUPPORT=yes
+  --gles-dir=*) GLES_DIR=$optarg
   ;;
   --no-gles) GLES_PROBE=no
   ;;
@@ -100,7 +99,7 @@ EOF
     echo "  --static                 build a completely static executable"
     echo "  --verbose                verbose configuration"
     echo "  --debug                  build debug version of the emulator"
-    echo "  --gles-libs=PATH         specify path to GLES emulation host libraries"
+    echo "  --gles-dir=PATH          specify path to GLES host emulation sources [auto-detected]"
     echo "  --no-gles                disable GLES emulation support"
     echo "  --no-pcbios              disable copying of PC Bios files"
     echo "  --multisim               the number of modem devices, default 1, max 9."
@@ -111,7 +110,10 @@ fi
 # On Linux, try to use our prebuilt toolchain to generate binaries
 # that are compatible with Ubuntu 8.04
 if [ -z "$CC" -a -z "$OPTION_CC" -a "$HOST_OS" = linux ] ; then
-    PROBE_HOST_CC=`dirname $0`/../../prebuilts/tools/gcc-sdk/gcc
+    PROBE_HOST_CC=`dirname $0`/../../prebuilts/gcc/linux-x86/host/x86_64-linux-glibc2.11-4.6/bin/x86_64-linux-gcc
+    if [ ! -f "$PROBE_HOST_CC" ] ; then
+        PROBE_HOST_CC=`dirname $0`/../../prebuilts/tools/gcc-sdk/gcc
+    fi
     if [ -f "$PROBE_HOST_CC" ] ; then
         echo "Using prebuilt toolchain: $PROBE_HOST_CC"
         CC="$PROBE_HOST_CC"
@@ -143,6 +145,18 @@ case $OS in
 esac
 
 TARGET_OS=$OS
+
+setup_toolchain
+
+BUILD_AR=$AR
+BUILD_CC=$CC
+BUILD_CXX=$CC
+BUILD_LD=$LD
+BUILD_AR=$AR
+BUILD_CFLAGS=$CFLAGS
+BUILD_CXXFLAGS=$CXXFLAGS
+BUILD_LDFLAGS=$LDFLAGS
+
 if [ "$OPTION_MINGW" = "yes" ] ; then
     enable_linux_mingw
     TARGET_OS=windows
@@ -163,27 +177,6 @@ check_android_build
 #
 if [ "$OPTION_NO_PREBUILTS" = "yes" ] ; then
     IN_ANDROID_BUILD=no
-fi
-
-# This is the list of static and shared host libraries we need to link
-# against in order to support OpenGLES emulation properly. Note that in
-# the case of a standalone build, we will find these libraries inside the
-# platform build tree and copy them into objs/lib/ automatically, unless
-# you use --gles-libs to point explicitely to a different directory.
-#
-GLES_SHARED_LIBRARIES="\
-  libOpenglRender \
-  libGLES_CM_translator \
-  libGLES_V2_translator \
-  libEGL_translator"
-
-if [ "$OPTION_MINGW" != "yes" ]; then
-  # There are no 64-bit libraries for Windows yet!
-  GLES_SHARED_LIBRARIES="$GLES_SHARED_LIBRARIES \
-    lib64OpenglRender \
-    lib64GLES_CM_translator \
-    lib64GLES_V2_translator \
-    lib64EGL_translator"
 fi
 
 if [ "$IN_ANDROID_BUILD" = "yes" ] ; then
@@ -218,22 +211,10 @@ if [ "$IN_ANDROID_BUILD" = "yes" ] ; then
     else
         log "Tools      : Could not locate $TOOLS_PROPS !?"
     fi
-
-    GLES_PROBE_LIB_DIR=$(dirname "$HOST_BIN")/lib
-    case $GLES_PROBE_LIB_DIR in
-        */windows/lib)
-            GLES_PROBE_LIB_DIR=${GLES_PROBE_LIB_DIR%%/windows/lib}/windows-x86/lib
-            ;;
-    esac
 else
     if [ "$USE_CCACHE" != 0 ]; then
         CCACHE=$(which ccache 2>/dev/null)
     fi
-    GLES_PROBE_OS=$TARGET_OS
-    if [ "$GLES_PROBE_OS" = "windows" ]; then
-      GLES_PROBE_OS=windows-x86
-    fi
-    GLES_PROBE_LIB_DIR=../../out/host/$GLES_PROBE_OS/lib
 fi  # IN_ANDROID_BUILD = no
 
 if [ -n "$CCACHE" -a -f "$CCACHE" ] ; then
@@ -247,39 +228,24 @@ fi
 # Try to find the GLES emulation headers and libraries automatically
 if [ "$GLES_PROBE" = "yes" ]; then
     GLES_SUPPORT=yes
-    if [ -z "$GLES_LIBS" ]; then
-        log "GLES       : Probing for host libraries"
-        GLES_LIBS=$GLES_PROBE_LIB_DIR
-        if [ -d "$GLES_LIBS" ]; then
-            echo "GLES       : Libs in $GLES_LIBS"
-        else
-            echo "Warning: Could nof find OpenGLES emulation libraries in: $GLES_LIBS"
+    if [ -z "$GLES_DIR" ]; then
+        GLES_DIR=../../sdk/emulator/opengl
+        log2 "GLES       : Probing source dir: $GLES_DIR"
+        if [ ! -d "$GLES_DIR" ]; then
+            GLES_DIR=../opengl
+            log2 "GLES       : Probing source dir: $GLES_DIR"
+            if [ ! -d "$GLES_DIR" ]; then
+                GLES_DIR=
+            fi
+        fi
+        if [ -z "$GLES_DIR" ]; then
+            echo "GLES       : Could not find GPU emulation sources!"
             GLES_SUPPORT=no
+        else
+            echo "GLES       : Found GPU emulation sources: $GLES_DIR"
+            GLES_SUPPORT=yes
         fi
     fi
-fi
-
-if [ "$GLES_SUPPORT" = "yes" ]; then
-    mkdir -p objs/lib
-
-    for lib in $GLES_SHARED_LIBRARIES; do
-        GLES_LIB=$GLES_LIBS/${lib}$TARGET_DLL_SUFFIX
-        if [ ! -f "$GLES_LIB" ]; then
-            echo "ERROR: Missing OpenGLES emulation host library: $GLES_LIB"
-            echo "Please fix this by using --gles-libs to point to the right directory!"
-            if [ "$IN_ANDROID_BUILD" = "true" ]; then
-                echo "You might also be missing the library because you forgot to rebuild the whole platform!"
-            fi
-            exit 1
-        fi
-        cp $GLES_LIB objs/lib
-        if [ $? != 0 ]; then
-            echo "ERROR: Could not find required OpenGLES emulation library: $GLES_LIB"
-            exit 1
-        else
-            log "GLES       : Copying $GLES_LIB"
-        fi
-    done
 fi
 
 if [ "$PCBIOS_PROBE" = "yes" ]; then
@@ -515,17 +481,6 @@ EOF
 feature_run_exec HOST_BIGENDIAN
 fi
 
-# check size of host long bits
-HOST_LONGBITS=32
-if [ "$TARGET_OS" = "$OS" ] ; then
-cat > $TMPC << EOF
-int main(void) {
-        return sizeof(void*)*8;
-}
-EOF
-feature_run_exec HOST_LONGBITS
-fi
-
 # check whether we have <byteswap.h>
 #
 feature_check_header HAVE_BYTESWAP_H      "<byteswap.h>"
@@ -534,6 +489,21 @@ feature_check_header HAVE_FNMATCH_H       "<fnmatch.h>"
 
 # Build the config.make file
 #
+
+case $OS in
+    windows)
+        HOST_EXEEXT=.exe
+        HOST_DLLEXT=.dll
+        ;;
+    darwin)
+        HOST_EXEEXT=
+        HOST_DLLEXT=.dylib
+        ;;
+    *)
+        HOST_EXEEXT=
+        HOST_DLLEXT=
+        ;;
+esac
 
 case $TARGET_OS in
     windows)
@@ -551,7 +521,7 @@ case $TARGET_OS in
 esac
 
 # Strip executables and shared libraries unless --debug is used.
-if [ "$OPTION_DEBUG" != "yes" ]; then
+if [ "$OPTION_DEBUG" != "yes" -a "$OPTION_NO_STRIP" != "yes" ]; then
     case $HOST_OS in
         darwin)
             LDFLAGS="$LDFLAGS -Wl,-S"
@@ -570,6 +540,18 @@ echo "HOST_DLLEXT       := $TARGET_DLLEXT" >> $config_mk
 echo "PREBUILT          := $ANDROID_PREBUILT" >> $config_mk
 echo "PREBUILTS         := $ANDROID_PREBUILTS" >> $config_mk
 
+echo "" >> $config_mk
+echo "BUILD_OS          := $HOST_OS" >> $config_mk
+echo "BUILD_ARCH        := $HOST_ARCH" >> $config_mk
+echo "BUILD_EXEEXT      := $HOST_EXEEXT" >> $config_mk
+echo "BUILD_DLLEXT      := $HOST_DLLEXT" >> $config_mk
+echo "BUILD_AR          := $BUILD_AR" >> $config_mk
+echo "BUILD_CC          := $BUILD_CC" >> $config_mk
+echo "BUILD_CXX         := $BUILD_CXX" >> $config_mk
+echo "BUILD_LD          := $BUILD_LD" >> $config_mk
+echo "BUILD_CFLAGS      := $BUILD_CFLAGS" >> $config_mk
+echo "BUILD_LDFLAGS     := $BUILD_LDFLAGS" >> $config_mk
+
 PWD=`pwd`
 echo "SRC_PATH          := $PWD" >> $config_mk
 if [ -n "$SDL_CONFIG" ] ; then
@@ -587,6 +569,10 @@ if [ $OPTION_DEBUG = yes ] ; then
 fi
 if [ $OPTION_STATIC = yes ] ; then
     echo "CONFIG_STATIC_EXECUTABLE := true" >> $config_mk
+fi
+if [ "$GLES_SUPPORT" = "yes" ]; then
+    echo "EMULATOR_BUILD_EMUGL       := true" >> $config_mk
+    echo "EMULATOR_EMUGL_SOURCES_DIR := $GLES_DIR" >> $config_mk
 fi
 
 if [ -n "$ANDROID_SDK_TOOLS_REVISION" ] ; then
@@ -611,16 +597,6 @@ cat > $config_h <<EOF
 /* This file was autogenerated by '$PROGNAME' */
 
 #define CONFIG_QEMU_SHAREDIR   "/usr/local/share/qemu"
-
-#if defined(__x86_64__)
-#define HOST_X86_64    1
-#define HOST_LONG_BITS  64
-#elif defined(__i386__)
-#define HOST_I386    1
-#define HOST_LONG_BITS  32
-#else
-#error Unknown architecture for codegen
-#endif
 
 EOF
 
