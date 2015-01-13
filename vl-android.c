@@ -60,7 +60,7 @@
 #include "android/hw-qemud.h"
 #include "android/camera/camera-service.h"
 #include "android/multitouch-port.h"
-#include "android/charmap.h"
+#include "android/skin/charmap.h"
 #include "android/globals.h"
 #include "android/utils/bufprint.h"
 #include "android/utils/debug.h"
@@ -2988,7 +2988,7 @@ int main(int argc, char **argv, char **envp)
                               "qemu: syntax: -max-dns-conns max_connections\n");
                       exit(1);
                     }
-                    if (max_dns_conns <= 0 ||  max_dns_conns == LONG_MAX) {
+                    if (max_dns_conns <= 0 ||  max_dns_conns == INT_MAX) {
                       fprintf(stderr,
                               "Invalid arg for max dns connections: %s\n",
                               optarg);
@@ -3176,7 +3176,7 @@ int main(int argc, char **argv, char **envp)
     }
 
     /* Initialize character map. */
-    if (android_charmap_setup(op_charmap_file)) {
+    if (skin_charmap_setup(op_charmap_file)) {
         if (op_charmap_file) {
             PANIC(
                     "Unable to initialize character map from file %s.",
@@ -4267,5 +4267,5 @@ int main(int argc, char **argv, char **envp)
 void
 android_emulation_teardown(void)
 {
-    android_charmap_done();
+    skin_charmap_done();
 }

@@ -32,11 +32,11 @@
 
 #include "math.h"
 
-#include "android/charmap.h"
 #include "android/config/config.h"
 #include "android/cpu_accelerator.h"
 
 #include "android/kernel/kernel_utils.h"
+#include "android/skin/charmap.h"
 #include "android/user-config.h"
 
 #include "android/utils/aconfig-file.h"
@@ -62,7 +62,7 @@
 #include "android/framebuffer.h"
 #include "android/iolooper.h"
 
-AndroidRotation  android_framebuffer_rotation;
+SkinRotation  android_framebuffer_rotation;
 
 #define  STRINGIFY(x)   _STRINGIFY(x)
 #define  _STRINGIFY(x)  #x
@@ -94,11 +94,6 @@ extern void  emulator_help( void );
 #define  VERBOSE_OPT(str,var)   { str, &var }
 
 #define  _VERBOSE_TAG(x,y)   { #x, VERBOSE_##x, y },
-static const struct { const char*  name; int  flag; const char*  text; }
-verbose_options[] = {
-    VERBOSE_TAG_LIST
-    { 0, 0, 0 }
-};
 
 void emulator_help( void )
 {
@@ -290,7 +285,7 @@ int main(int argc, char **argv)
 
     /* -charmap is incompatible with -attach-core, because particular
      * charmap gets set up in the running core. */
-    if (android_charmap_setup(opts->charmap)) {
+    if (skin_charmap_setup(opts->charmap)) {
         exit(1);
     }
 
@@ -335,24 +330,29 @@ int main(int argc, char **argv)
         exit(1);
     }
 
+    SkinKeyset* keyset = NULL;
     if (opts->keyset) {
         parse_keyset(opts->keyset, opts);
-        if (!android_keyset) {
+        keyset = skin_keyset_get_default();
+        if (!keyset) {
             fprintf(stderr,
                     "emulator: WARNING: could not find keyset file named '%s',"
                     " using defaults instead\n",
                     opts->keyset);
         }
     }
-    if (!android_keyset) {
+    if (!keyset) {
         parse_keyset("default", opts);
-        if (!android_keyset) {
-            android_keyset = skin_keyset_new_from_text( skin_keyset_get_default() );
-            if (!android_keyset) {
+        keyset = skin_keyset_get_default();
+        if (!keyset) {
+            keyset = skin_keyset_new_from_text(
+                    skin_keyset_get_default_text());
+            if (!keyset) {
                 fprintf(stderr, "PANIC: default keyset file is corrupted !!\n" );
                 fprintf(stderr, "PANIC: please update the code in android/skin/keyset.c\n" );
                 exit(1);
             }
+            skin_keyset_set_default(keyset);
             if (!opts->keyset)
                 write_default_keyset();
         }
@@ -1149,7 +1149,7 @@ int main(int argc, char **argv)
     }
 
     if (opts->charmap) {
-        char charmap_name[AKEYCHARMAP_NAME_SIZE];
+        char charmap_name[SKIN_CHARMAP_NAME_SIZE];
 
         if (!path_exists(opts->charmap)) {
             derror("Charmap file does not exist: %s", opts->charmap);
