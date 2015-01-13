@@ -93,6 +93,9 @@ CFG_FLAG ( noskin, "same as -no-skin" )
 CFG_FLAG ( dynamic_skin, "dynamically construct a skin of given size, requires -skin WxH option" )
 CFG_PARAM( memory, "<size>", "physical RAM size in MBs" )
 
+OPT_PARAM( accel, "<mode>", "Configure emulation acceleration" )
+OPT_FLAG ( no_accel, "Same as '-accel off'" )
+
 OPT_PARAM( netspeed, "<speed>", "maximum network download/upload speeds" )
 OPT_PARAM( netdelay, "<delay>", "network latency emulation" )
 OPT_FLAG ( netfast, "disable network shaping" )
@@ -146,15 +149,6 @@ OPT_PARAM( shared_net_id, "<number>", "join the shared network, using IP address
 #ifdef CONFIG_NAND_LIMITS
 OPT_PARAM( nand_limits, "<nlimits>", "enforce NAND/Flash read/write thresholds" )
 #endif
-
-#ifdef CONFIG_ANDROID_MEMCHECK
-OPT_PARAM( memcheck, "<flags>", "enable memory access checking" )
-#endif  // CONFIG_ANDROID_MEMCHECK
-
-#ifdef CONFIG_STANDALONE_UI
-OPT_PARAM( list_cores, "<host>", "list running core process" )
-OPT_PARAM( attach_core, "<console socket>", "attach to a running core process" )
-#endif  // CONFIG_STANDALONE_UI
 
 OPT_PARAM( gpu, "<mode>", "set hardware OpenGLES emulation mode" )
 

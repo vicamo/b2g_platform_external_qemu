@@ -88,11 +88,7 @@ endif
 ###########################################################
 # Zlib sources
 #
-ZLIB_DIR := distrib/zlib-1.2.8
-include $(LOCAL_PATH)/$(ZLIB_DIR)/sources.make
-EMULATOR_COMMON_CFLAGS += -I$(LOCAL_PATH)/$(ZLIB_DIR)
-
-common_LOCAL_SRC_FILES += $(ZLIB_SOURCES)
+EMULATOR_COMMON_CFLAGS += -I$(ZLIB_INCLUDES)
 
 ###########################################################
 # GLib sources
@@ -107,6 +103,7 @@ common_LOCAL_SRC_FILES += $(GLIB_SOURCES)
 # Android utility functions
 #
 common_LOCAL_SRC_FILES += \
+	android/android-constants.c \
 	android/async-console.c \
 	android/async-utils.c \
 	android/charmap.c \
@@ -123,8 +120,13 @@ common_LOCAL_SRC_FILES += \
 	android/base/files/PathUtils.cpp \
 	android/base/Log.cpp \
 	android/base/String.cpp \
+	android/base/StringFormat.cpp \
 	android/base/StringView.cpp \
+	android/emulation/CpuAccelerator.cpp \
 	android/filesystems/ext4_utils.cpp \
+	android/filesystems/fstab_parser.cpp \
+	android/filesystems/partition_types.cpp \
+	android/filesystems/ramdisk_extractor.cpp \
 	android/kernel/kernel_utils.cpp \
 	android/utils/assert.c \
 	android/utils/bufprint.c \
@@ -134,6 +136,7 @@ common_LOCAL_SRC_FILES += \
 	android/utils/eintr_wrapper.c \
 	android/utils/filelock.c \
 	android/utils/file_data.c \
+	android/utils/host_bitness.c \
 	android/utils/ini.c \
 	android/utils/intmap.c \
 	android/utils/lineinput.c \
@@ -152,6 +155,7 @@ common_LOCAL_SRC_FILES += \
 
 common_LOCAL_CFLAGS += $(EMULATOR_COMMON_CFLAGS)
 
+common_LOCAL_CFLAGS += -I$(LIBEXT4_UTILS_INCLUDES)
 
 ## one for 32-bit
 $(call start-emulator-library, emulator-common)
@@ -160,13 +164,11 @@ LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
 $(call gen-hw-config-defs)
 $(call end-emulator-library)
 
-ifdef EMULATOR_BUILD_64BITS
-  $(call start-emulator-library, emulator64-common)
-  LOCAL_CFLAGS += $(common_LOCAL_CFLAGS) -m64
-  LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
-  $(call gen-hw-config-defs)
-  $(call end-emulator-library)
-endif # EMULATOR_BUILD_64BITS
+$(call start-emulator64-library, emulator64-common)
+LOCAL_CFLAGS += $(common_LOCAL_CFLAGS)
+LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
+$(call gen-hw-config-defs)
+$(call end-emulator-library)
 
 ##############################################################################
 ##############################################################################
@@ -202,9 +204,9 @@ common_LOCAL_SRC_FILES += $(LIBPNG_SOURCES) android/loadpng.c
 BUILD_SDL_FROM_SOURCES := true
 
 # On linux-x86, using the prebuilts avoid installing all the X11
-# development packages on our build servers.
-#
-ifeq ($(QEMU_HOST_TAG),linux-x86)
+# development packages on our build servers. Note: When building 64-bit
+# host binaries, don't use 32-bit SDL prebuilts.
+ifeq ($(strip $(QEMU_HOST_TAG)$(HOST_IS_64_BIT)),linux-x86)
     BUILD_SDL_FROM_SOURCES := false
 endif
 
@@ -297,13 +299,11 @@ $(call gen-hw-config-defs)
 $(call end-emulator-library)
 
 
-ifdef EMULATOR_BUILD_64BITS
-  $(call start-emulator-library, emulator64-libui)
-  LOCAL_CFLAGS += $(common_LOCAL_CFLAGS) -m64
-  LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
-  $(call gen-hw-config-defs)
-  $(call end-emulator-library)
-endif # HOST_OS == linux || darwin
+$(call start-emulator64-library, emulator64-libui)
+LOCAL_CFLAGS += $(common_LOCAL_CFLAGS)
+LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
+$(call gen-hw-config-defs)
+$(call end-emulator-library)
 
 
 ##############################################################################
@@ -608,25 +608,23 @@ $(call end-emulator-library)
 
 
 ## another for 64-bit, see note in emulator64-common
-ifdef EMULATOR_BUILD_64BITS
-  $(call start-emulator-library, emulator64-libqemu)
-  # gdbstub-xml.c contains C-compilable arrays corresponding to the content
-  # of $(LOCAL_PATH)/gdb-xml/, and is generated with the 'feature_to_c.sh' script.
-  #
-  intermediates = $(call intermediates-dir-for,STATIC_LIBRARIES,$(LOCAL_MODULE),true)
-  QEMU_GDBSTUB_XML_C = $(intermediates)/gdbstub-xml.c
-  $(QEMU_GDBSTUB_XML_C): PRIVATE_PATH := $(LOCAL_PATH)
-  $(QEMU_GDBSTUB_XML_C): PRIVATE_SOURCES := $(TARGET_XML_SOURCES)
-  $(QEMU_GDBSTUB_XML_C): PRIVATE_CUSTOM_TOOL = $(PRIVATE_PATH)/feature_to_c.sh $@ $(QEMU_TARGET_XML_SOURCES)
-  $(QEMU_GDBSTUB_XML_C): $(QEMU_TARGET_XML_SOURCES) $(LOCAL_PATH)/feature_to_c.sh
+$(call start-emulator64-library, emulator64-libqemu)
+# gdbstub-xml.c contains C-compilable arrays corresponding to the content
+# of $(LOCAL_PATH)/gdb-xml/, and is generated with the 'feature_to_c.sh' script.
+#
+intermediates = $(call intermediates-dir-for,STATIC_LIBRARIES,$(LOCAL_MODULE),true)
+QEMU_GDBSTUB_XML_C = $(intermediates)/gdbstub-xml.c
+$(QEMU_GDBSTUB_XML_C): PRIVATE_PATH := $(LOCAL_PATH)
+$(QEMU_GDBSTUB_XML_C): PRIVATE_SOURCES := $(TARGET_XML_SOURCES)
+$(QEMU_GDBSTUB_XML_C): PRIVATE_CUSTOM_TOOL = $(PRIVATE_PATH)/feature_to_c.sh $@ $(QEMU_TARGET_XML_SOURCES)
+$(QEMU_GDBSTUB_XML_C): $(QEMU_TARGET_XML_SOURCES) $(LOCAL_PATH)/feature_to_c.sh
 	$(hide) rm -f $@
 	$(transform-generated-source)
-  LOCAL_GENERATED_SOURCES += $(QEMU_GDBSTUB_XML_C)
-  LOCAL_CFLAGS += $(common_LOCAL_CFLAGS) -I$(intermediates) -m64
-  LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
-  $(call gen-hw-config-defs)
-  $(call end-emulator-library)
-endif # EMULATOR_BUILD_64BITS
+LOCAL_GENERATED_SOURCES += $(QEMU_GDBSTUB_XML_C)
+LOCAL_CFLAGS += $(common_LOCAL_CFLAGS) -I$(intermediates)
+LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
+$(call gen-hw-config-defs)
+$(call end-emulator-library)
 
 
 # Block sources, we must compile them with each executable because they
@@ -686,60 +684,10 @@ $(call end-emulator-library)
 
 
 ## another for 64-bit, see note in emulator64-common
-ifdef EMULATOR_BUILD_64BITS
-  $(call start-emulator-library, emulator64-libjpeg)
-  LOCAL_CFLAGS += $(common_LOCAL_CFLAGS) -m64
-  LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
-  $(call end-emulator-library)
-endif # EMULATOR_BUILD_64BITS
-
-
-##############################################################################
-##############################################################################
-###
-###  emulator-libelff: TARGET-INDEPENDENT ELF/DWARF PARSER
-###
-###  THESE ARE USED BY EVERYTHING EXCEPT 'emulator-ui', BUT WE CANNOT PUT
-###  THEM IN emulator-libqemu SINCE THE SOURCES ARE C++
-###
-
-common_LOCAL_CFLAGS =
-common_LOCAL_SRC_FILES =
-
-ELFF_CFLAGS := -I$(LOCAL_PATH)/distrib/elff
-ELFF_LDLIBS := -lstdc++
-
-ELFF_SOURCES := \
-    dwarf_cu.cc \
-    dwarf_die.cc \
-    dwarf_utils.cc \
-    elf_alloc.cc \
-    elf_file.cc \
-    elf_mapped_section.cc \
-    elff_api.cc \
-
-common_LOCAL_SRC_FILES += $(ELFF_SOURCES:%=distrib/elff/elff/%)
-
-common_LOCAL_CFLAGS += \
-    -fno-exceptions \
-    $(ELFF_CFLAGS) \
-
-
-## one for 32-bit
-$(call start-emulator-library, emulator-libelff)
-LOCAL_CPP_EXTENSION := .cc
+$(call start-emulator64-library, emulator64-libjpeg)
 LOCAL_CFLAGS += $(common_LOCAL_CFLAGS)
 LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
 $(call end-emulator-library)
-
-
-ifdef EMULATOR_BUILD_64BITS
-  $(call start-emulator-library, emulator64-libelff)
-  LOCAL_CPP_EXTENSION := .cc
-  LOCAL_CFLAGS += $(common_LOCAL_CFLAGS) -m64
-  LOCAL_SRC_FILES += $(common_LOCAL_SRC_FILES)
-  $(call end-emulator-library)
-endif # EMULATOR_BUILD_64BITS
 
 
 ##############################################################################
@@ -777,4 +725,3 @@ $$(QEMU_HEADER_H): $$(LOCAL_PATH)/$$1 $$(LOCAL_PATH)/hxtool
 LOCAL_GENERATED_SOURCES += $$(QEMU_HEADER_H)
 LOCAL_C_INCLUDES += $$(intermediates)
 endef
-

@@ -13,6 +13,9 @@ export LC_ALL=C
 VERBOSE=0
 
 MINGW=
+NO_TESTS=
+OUT_DIR=objs
+
 for OPT; do
     case $OPT in
         --mingw)
@@ -20,6 +23,12 @@ for OPT; do
             ;;
         --verbose)
             VERBOSE=$(( $VERBOSE + 1 ))
+            ;;
+        --no-tests)
+            NO_TESTS=true
+            ;;
+        --out-dir=*)
+            OUT_DIR=${OPT##--out-dir=}
             ;;
         --help|-?)
             VERBOSE=2
@@ -59,11 +68,11 @@ esac
 cd `dirname $0`
 rm -rf objs
 echo "Configuring build."
-run ./android-configure.sh "$@" ||
+run ./android-configure.sh --out-dir=$OUT_DIR "$@" ||
     panic "Configuration error, please run ./android-configure.sh to see why."
 
 echo "Building sources."
-run make -j$HOST_NUM_CPUS ||
+run make -j$HOST_NUM_CPUS OBJS_DIR="$OUT_DIR" ||
     panic "Could not build sources, please run 'make' to see why."
 
 RUN_64BIT_TESTS=true
@@ -74,25 +83,36 @@ if [ "$MINGW" ]; then
   RUN_64BIT_TESTS=
   TEST_SHELL=wine
   EXE_SUFFIX=.exe
+
+  # Check for Wine on this machine.
+  WINE_CMD=$(which $TEST_SHELL 2>/dev/null || true)
+  if [ -z "$NO_TESTS" -a -z "$WINE_CMD" ]; then
+    echo "WARNING: Wine is not installed on this machine!! Unit tests will be ignored!!"
+    NO_TESTS=true
+  fi
 fi
 
-echo "Running 32-bit unit test suite."
-FAILURES=""
-for UNIT_TEST in emulator_unittests emugl_common_host_unittests; do
-  echo "   - $UNIT_TEST"
-  run $TEST_SHELL objs/$UNIT_TEST$EXE_SUFFIX || FAILURES="$FAILURES $UNIT_TEST"
-done
-
-if [ "$RUN_64BIT_TESTS" ]; then
-    echo "Running 64-bit unit test suite."
-    for UNIT_TEST in emulator64_unittests emugl64_common_host_unittests; do
-        echo "   - $UNIT_TEST"
-        run $TEST_SHELL objs/$UNIT_TEST$EXE_SUFFIX || FAILURES="$FAILURES $UNIT_TEST"
+if [ -z "$NO_TESTS" ]; then
+    echo "Running 32-bit unit test suite."
+    FAILURES=""
+    for UNIT_TEST in emulator_unittests emugl_common_host_unittests; do
+    echo "   - $UNIT_TEST"
+    run $TEST_SHELL $OUT_DIR/$UNIT_TEST$EXE_SUFFIX || FAILURES="$FAILURES $UNIT_TEST"
     done
-fi
 
-if [ "$FAILURES" ]; then
-    panic "Unit test failures: $FAILURES"
+    if [ "$RUN_64BIT_TESTS" ]; then
+        echo "Running 64-bit unit test suite."
+        for UNIT_TEST in emulator64_unittests emugl64_common_host_unittests; do
+            echo "   - $UNIT_TEST"
+            run $TEST_SHELL $OUT_DIR/$UNIT_TEST$EXE_SUFFIX || FAILURES="$FAILURES $UNIT_TEST"
+        done
+    fi
+
+    if [ "$FAILURES" ]; then
+        panic "Unit test failures: $FAILURES"
+    fi
+else
+    echo "Ignoring unit tests suite."
 fi
 
 echo "Done. !!"
