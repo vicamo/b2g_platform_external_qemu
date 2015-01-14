@@ -82,7 +82,9 @@ HW_SOURCES := \
     android/goldfish/nand.c \
     android/goldfish/nfc.c \
     android/goldfish/pipe.c \
+    android/goldfish/profile.c \
     android/goldfish/rfkill.c \
+    android/goldfish/trace.c \
     android/goldfish/tty.c \
     android/goldfish/vmem.c \
     nfc/llcp.c \
@@ -178,6 +180,7 @@ common_LOCAL_SRC_FILES += \
     memory-android.c \
     monitor-android.c \
     translate-all.c \
+    code-profile.c \
 
 ##############################################################################
 # CPU-specific emulation.
