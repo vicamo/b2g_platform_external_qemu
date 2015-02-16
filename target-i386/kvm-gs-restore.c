@@ -177,7 +177,10 @@ int no_gs_ioctl(int fd, int type, void *arg)
       "movl %%eax, %0\n"
       : "=m"(ret)
       :"m"(fd),"m"(type),"m"(arg)
-      :"%edx","%ecx","%eax","%ebx"
+      :"%edx","%ecx","%eax"
+#if !defined(__i386__)
+      ,"%ebx"
+#endif
       );
 
     return ret;
