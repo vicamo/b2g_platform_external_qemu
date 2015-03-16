@@ -131,6 +131,7 @@ static int _amodem_switch_technology(AModem modem, AModemTech newtech, int32_t n
 static int _amodem_set_cdma_subscription_source( AModem modem, ACdmaSubscriptionSource ss);
 static int _amodem_set_cdma_prl_version( AModem modem, int prlVersion);
 static const char* handleSignalStrength( const char*  cmd, AModem  modem);
+static void voice_call_event( void*  _vcall );
 
 #if DEBUG
 static const char*  quote( const char*  line )
@@ -1344,6 +1345,72 @@ amodem_add_inbound_call( AModem  modem, const char*  number, const int  numPrese
         || (namePresentation > 0 && namePresentation <= 2)) {
         amodem_unsol( modem, "+CNAP: \"%s\",%d\r", cnapName, namePresentation);
     }
+    return 0;
+}
+
+static ACall
+_amodem_add_outbound_call( AModem  modem, const char* cmd )
+{
+    AVoiceCall  vcall = amodem_alloc_call( modem );
+    ACall       call  = &vcall->call;
+    int         len;
+
+    if (call == NULL)
+        return NULL;
+
+    call->dir   = A_CALL_OUTBOUND;
+    call->state = A_CALL_DIALING;
+    call->mode  = A_CALL_VOICE;
+    call->multi = 0;
+
+    len  = strlen(cmd);
+    if (len > 0 && cmd[len-1] == ';')
+        len--;
+
+    /* clir */
+    if (len > 0 && (cmd[len-1] == 'I' || cmd[len-1] == 'i'))
+        len--;
+
+    if (len >= sizeof(call->number))
+        len = sizeof(call->number)-1;
+
+    /* Converts 4, 5, 7, and 10 digits number to 11 digits */
+    if ((len == 10 && (!strncmp(cmd, PHONE_PREFIX+1, 5) && ((cmd[5] - '1') == modem->instance_id)))
+        || (len == 7 && (!strncmp(cmd, PHONE_PREFIX+4, 2) && ((cmd[2] - '1') == modem->instance_id)))
+        || (len == 5 && ((cmd[0] - '1') == modem->instance_id))) {
+        memcpy( call->number, PHONE_PREFIX, 11 - len );
+        memcpy( call->number + 11 - len, cmd, len );
+        call->number[11] = 0;
+    } else if (len == 4) {
+        memcpy( call->number, PHONE_PREFIX, 6 );
+        call->number[6] = '1' + modem->instance_id;
+        memcpy( call->number+7, cmd, len );
+        call->number[11] = 0;
+    } else {
+        memcpy( call->number, cmd, len );
+        call->number[len] = 0;
+    }
+
+    call->numberPresentation = 0;
+
+    amodem_send_calls_update( modem );
+
+    vcall->is_remote = (remote_number_string_to_port(call->number, modem, NULL, NULL) > 0);
+
+    vcall->timer = sys_timer_create();
+    sys_timer_set( vcall->timer, sys_time_ms() + CALL_DELAY_DIAL,
+                   voice_call_event, vcall );
+
+    return call;
+}
+
+int
+amodem_add_outbound_call( AModem  modem, const char*  number )
+{
+    ACall call = _amodem_add_outbound_call(modem, number);
+    if (call == NULL)
+        return -1;
+
     return 0;
 }
 
@@ -3201,63 +3268,17 @@ static int amodem_is_emergency( AModem modem, const char *number )
 static const char*
 handleDial( const char*  cmd, AModem  modem )
 {
-    AVoiceCall  vcall = amodem_alloc_call( modem );
-    ACall       call  = &vcall->call;
-    int         len;
+    assert( cmd[0] == 'D' );
 
+    ACall call = _amodem_add_outbound_call(modem, cmd+1);
     if (call == NULL)
         return "ERROR: TOO MANY CALLS";
-
-    assert( cmd[0] == 'D' );
-    call->dir   = A_CALL_OUTBOUND;
-    call->state = A_CALL_DIALING;
-    call->mode  = A_CALL_VOICE;
-    call->multi = 0;
-
-    cmd += 1;
-    len  = strlen(cmd);
-    if (len > 0 && cmd[len-1] == ';')
-        len--;
-
-    /* clir */
-    if (len > 0 && (cmd[len-1] == 'I' || cmd[len-1] == 'i'))
-        len--;
-
-    if (len >= sizeof(call->number))
-        len = sizeof(call->number)-1;
-
-    /* Converts 4, 5, 7, and 10 digits number to 11 digits */
-    if ((len == 10 && (!strncmp(cmd, PHONE_PREFIX+1, 5) && ((cmd[5] - '1') == modem->instance_id)))
-        || (len == 7 && (!strncmp(cmd, PHONE_PREFIX+4, 2) && ((cmd[2] - '1') == modem->instance_id)))
-        || (len == 5 && ((cmd[0] - '1') == modem->instance_id))) {
-        memcpy( call->number, PHONE_PREFIX, 11 - len );
-        memcpy( call->number + 11 - len, cmd, len );
-        call->number[11] = 0;
-    } else if (len == 4) {
-        memcpy( call->number, PHONE_PREFIX, 6 );
-        call->number[6] = '1' + modem->instance_id;
-        memcpy( call->number+7, cmd, len );
-        call->number[11] = 0;
-    } else {
-        memcpy( call->number, cmd, len );
-        call->number[len] = 0;
-    }
-
-    call->numberPresentation = 0;
-
-    amodem_send_calls_update( modem );
 
     amodem_begin_line( modem );
     if (amodem_is_emergency(modem, call->number)) {
         modem->in_emergency_mode = 1;
         amodem_add_line( modem, "+WSOS: 1" );
     }
-    vcall->is_remote = (remote_number_string_to_port(call->number, modem, NULL, NULL) > 0);
-
-    vcall->timer = sys_timer_create();
-    sys_timer_set( vcall->timer, sys_time_ms() + CALL_DELAY_DIAL,
-                   voice_call_event, vcall );
-
     return amodem_end_line( modem );
 }
 
