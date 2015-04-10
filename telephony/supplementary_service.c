@@ -19,15 +19,38 @@
 #  define  D(...)   ((void)0)
 #endif
 
+typedef char AServicePasswdRec [SERVICE_PASSWD_MAX_PASSWD_LENGTH + 1];
+
+typedef struct ACallBarringRec_ {
+    bool enabled;
+} ACallBarringRec, *ACallBarring;
+
 typedef struct ASupplementaryServiceRec_ {
+    /* passwords */
+    AServicePasswdRec  passwd[SERVICE_PASSWD_MAX_TYPE + 1];
+
     /* call forward conditions */
     ACallForwardRec*  call_forward[CALL_FORWARDING_MAX_REASON + 1]
                                   [CALL_FORWARDING_MAX_CLASSX_OFFSET + 1];
+    /* call barring programs */
+    ACallBarringRec  call_barring[CALL_BARRING_MAX_PROGRAM + 1]
+                                 [CALL_BARRING_MAX_CLASSX_OFFSET + 1];
 } ASupplementaryServiceRec;
 
 static ASupplementaryServiceRec  _s_supplementary[MAX_GSM_DEVICES];
 
-static int
+static void
+asupplementary_passwd_init(ASupplementaryService supplementary)
+{
+    int i = 0;
+    for (i = 0; i <= SERVICE_PASSWD_MAX_TYPE; i++) {
+        strncpy(supplementary->passwd[i],
+                SERVICE_PASSWD_DEFAULT_PASSWD,
+                SERVICE_PASSWD_MAX_PASSWD_LENGTH);
+    }
+}
+
+static void
 asupplementary_callforward_init(ASupplementaryService supplementary)
 {
     // Init call forward record.
@@ -49,12 +72,27 @@ asupplementary_callforward_destroy(ASupplementaryService supplementary)
     }
 }
 
+static void
+asupplementary_callbarring_init(ASupplementaryService supplementary)
+{
+    int i;
+    int j;
+
+    for (i = 0; i <= CALL_BARRING_MAX_PROGRAM; i++) {
+        for (j = 0; j <= CALL_BARRING_MAX_CLASSX_OFFSET; j++) {
+            supplementary->call_barring[i][j].enabled = false;
+        }
+    }
+}
+
 ASupplementaryService
 asupplementary_create(int base_port, int instance_id)
 {
     ASupplementaryService supplementary = &_s_supplementary[instance_id];
 
+    asupplementary_passwd_init(supplementary);
     asupplementary_callforward_init(supplementary);
+    asupplementary_callbarring_init(supplementary);
 
     return supplementary;
 }
@@ -63,6 +101,25 @@ void
 asupplementary_destroy(ASupplementaryService supplementary)
 {
     asupplementary_callforward_destroy(supplementary);
+}
+
+bool
+asupplementary_check_passwd(ASupplementaryService supplementary,
+                            AServiceType type, char *passwd)
+{
+    char *target_passwd = NULL;
+    switch (type) {
+        case A_SERVICE_TYPE_CALL_BARRING:
+            target_passwd = supplementary->passwd[A_SERVICE_TYPE_CALL_BARRING];
+            break;
+    }
+
+    if (!target_passwd || !passwd ||
+        strncmp(target_passwd, passwd, SERVICE_PASSWD_MAX_PASSWD_LENGTH)) {
+        return false;
+    }
+
+    return true;
 }
 
 int
@@ -122,4 +179,55 @@ asupplementary_get_call_foward(ASupplementaryService supplementary,
     }
 
     return supplementary->call_forward[reason][classx_offset];
+}
+
+bool
+asupplementary_set_call_barring(ASupplementaryService supplementary,
+                                ACallBarringProgram program,
+                                AServiceClassxOffset classx_offset,
+                                int enable)
+{
+    if (program < 0 ||
+        program > CALL_BARRING_MAX_PROGRAM ||
+        classx_offset < 0 ||
+        classx_offset > CALL_BARRING_MAX_CLASSX_OFFSET) {
+        return false;
+    }
+
+    if (enable) {
+        if (program == A_CALL_BARRING_PROGRAM_AO ||
+            program == A_CALL_BARRING_PROGRAM_OI ||
+            program == A_CALL_BARRING_PROGRAM_OX ) {
+            // According to TS 22.088 clause 1.3.5, there can be only one active
+            // outgoing call barring program.
+            supplementary->call_barring[A_CALL_BARRING_PROGRAM_AO][classx_offset].enabled = false;
+            supplementary->call_barring[A_CALL_BARRING_PROGRAM_OI][classx_offset].enabled = false;
+            supplementary->call_barring[A_CALL_BARRING_PROGRAM_OX][classx_offset].enabled = false;
+
+        } else if (program == A_CALL_BARRING_PROGRAM_AI ||
+                   program == A_CALL_BARRING_PROGRAM_IR ) {
+            // According to TS 22.088 clause 2.3.5, there can be only one active
+            // incoming call barring program.
+            supplementary->call_barring[A_CALL_BARRING_PROGRAM_AI][classx_offset].enabled = false;
+            supplementary->call_barring[A_CALL_BARRING_PROGRAM_IR][classx_offset].enabled = false;
+        }
+    }
+
+    supplementary->call_barring[program][classx_offset].enabled = enable;
+    return true;
+}
+
+bool
+asupplementary_is_call_barring_enabled(ASupplementaryService supplementary,
+                                       ACallBarringProgram program,
+                                       AServiceClassxOffset classx_offset)
+{
+    if (program < 0 ||
+        program > CALL_BARRING_MAX_PROGRAM ||
+        classx_offset < 0 ||
+        classx_offset > CALL_BARRING_MAX_CLASSX_OFFSET) {
+        return false;
+    }
+
+    return supplementary->call_barring[program][classx_offset].enabled;
 }
