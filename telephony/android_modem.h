@@ -45,6 +45,7 @@ typedef enum {
 } ARadioState;
 
 extern ARadioState  amodem_get_radio_state( AModem modem );
+extern void         amodem_set_radio_state( AModem modem, ARadioState state );
 
 /* Get the received signal strength indicator and bit error rate */
 extern void         amodem_get_signal_strength( AModem modem, int* rssi, int* ber );
@@ -222,6 +223,7 @@ extern int    amodem_get_call_count( AModem  modem );
 extern ACall  amodem_get_call( AModem  modem,  int  index );
 extern ACall  amodem_find_call_by_number( AModem  modem, const char*  number );
 extern int    amodem_add_inbound_call( AModem  modem, const char*  number, const int  numPresentation, const char*  name, const int  namePresentation );
+extern int    amodem_add_outbound_call( AModem  modem, const char*  number );
 extern int    amodem_update_call( AModem  modem, const char*  number, ACallState  state );
 extern int    amodem_disconnect_call( AModem  modem, const char*  number );
 extern int    amodem_remote_call_busy( AModem  modem, const char*  number );
@@ -238,6 +240,15 @@ extern void amodem_set_gsm_location( AModem modem, int lac, int ci );
 
 extern int amodem_get_base_port( AModem  modem );
 extern int amodem_get_instance_id( AModem  modem );
+
+/** Enable/Disable the selected modem feature
+ **/
+
+typedef enum {
+    A_MODEM_FEATURE_HOLD = (0x01 << 0)
+} AModemFeature;
+
+extern int amodem_set_feature( AModem  modem, AModemFeature  feature, bool  enable );
 
 /**/
 
