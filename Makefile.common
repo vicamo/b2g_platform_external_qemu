@@ -438,6 +438,7 @@ CORE_MISC_SOURCES = \
     qemu-malloc.c \
     qemu-option.c \
     qemu-sockets-android.c \
+    qemu-thread.c \
     qerror.c \
     readline.c \
     savevm.c \
@@ -485,7 +486,6 @@ endif
 
 ifeq ($(HOST_OS),linux)
     CORE_MISC_SOURCES += usb-linux.c \
-                         qemu-thread.c \
                          android/camera/camera-capture-linux.c
 else
     CORE_MISC_SOURCES += usb-dummy-android.c
