@@ -662,8 +662,7 @@ void helper_sdr(CPUMIPSState *env, target_ulong arg1, target_ulong arg2,
           walking the list of CPUMIPSStates.  */
 static CPUMIPSState *mips_cpu_map_tc(CPUMIPSState *env, int *tc)
 {
-    CPUMIPSState *other;
-    int vpe_idx, nr_threads = env->nr_threads;
+    int vpe_idx, nr_threads = ENV_GET_CPU(env)->nr_threads;
     int tc_idx = *tc;
 
     if (!(env->CP0_VPEConf0 & (1 << CP0VPEC0_MVP))) {
@@ -674,8 +673,8 @@ static CPUMIPSState *mips_cpu_map_tc(CPUMIPSState *env, int *tc)
 
     vpe_idx = tc_idx / nr_threads;
     *tc = tc_idx % nr_threads;
-    other = qemu_get_cpu(vpe_idx);
-    return other ? other : env;
+    CPUState *other = qemu_get_cpu(vpe_idx);
+    return other ? other->env_ptr : env;
 }
 
 /* The per VPE CP0_Status register shares some fields with the per TC
@@ -2059,7 +2058,7 @@ void helper_pmon(CPUMIPSState *env, int function)
 
 void helper_wait(CPUMIPSState *env)
 {
-    env->halted = 1;
+    ENV_GET_CPU(env)->halted = 1;
     helper_raise_exception(env, EXCP_HLT);
 }
 
@@ -2068,8 +2067,6 @@ void helper_wait(CPUMIPSState *env)
 static void do_unaligned_access (CPUMIPSState *env,
                                  target_ulong addr, int is_write,
                                  int is_user, uintptr_t retaddr);
-
-#define env cpu_single_env
 
 #define MMUSUFFIX _mmu
 #define ALIGNED_ONLY
@@ -2085,8 +2082,6 @@ static void do_unaligned_access (CPUMIPSState *env,
 
 #define SHIFT 3
 #include "exec/softmmu_template.h"
-
-#undef env
 
 static void do_unaligned_access(CPUMIPSState *env, target_ulong addr,
                                 int is_write, int is_user, uintptr_t retaddr)

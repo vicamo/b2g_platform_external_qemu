@@ -20,7 +20,9 @@
 #define CPU_ALL_H
 
 #include "qemu-common.h"
+#include "qemu/queue.h"
 #include "qemu/thread.h"
+#include "qemu/tls.h"
 #include "exec/cpu-common.h"
 
 /* some important defines:
@@ -359,20 +361,8 @@ void page_set_flags(target_ulong start, target_ulong end, int flags);
 int page_check_range(target_ulong start, target_ulong len, int flags);
 #endif
 
-CPUArchState *cpu_copy(CPUArchState *env);
-CPUArchState *qemu_get_cpu(int cpu);
-
-#define CPU_DUMP_CODE 0x00010000
-
-void cpu_dump_state(CPUArchState *env, FILE *f, fprintf_function cpu_fprintf,
-                    int flags);
-void cpu_dump_statistics(CPUArchState *env, FILE *f, fprintf_function cpu_fprintf,
-                          int flags);
-
 void QEMU_NORETURN cpu_abort(CPUArchState *env, const char *fmt, ...)
     GCC_FMT_ATTR(2, 3);
-extern CPUArchState *first_cpu;
-extern CPUArchState *cpu_single_env;
 
 /* Flags for use in ENV->INTERRUPT_PENDING.
 
@@ -424,13 +414,6 @@ extern CPUArchState *cpu_single_env;
      | CPU_INTERRUPT_TGT_EXT_3   \
      | CPU_INTERRUPT_TGT_EXT_4)
 
-void cpu_interrupt(CPUOldState *s, int mask);
-void cpu_reset_interrupt(CPUOldState *env, int mask);
-
-void cpu_exit(CPUOldState *s);
-
-bool qemu_cpu_has_work(CPUOldState *env);
-
 /* Breakpoint/watchpoint flags */
 #define BP_MEM_READ           0x01
 #define BP_MEM_WRITE          0x02
@@ -456,10 +439,7 @@ void cpu_watchpoint_remove_all(CPUArchState *env, int mask);
 #define SSTEP_NOIRQ   0x2  /* Do not use IRQ while single stepping */
 #define SSTEP_NOTIMER 0x4  /* Do not Timers while single stepping */
 
-void cpu_single_step(CPUOldState *env, int enabled);
-void cpu_reset(CPUOldState *s);
-int cpu_is_stopped(CPUOldState *env);
-void run_on_cpu(CPUOldState *env, void (*func)(void *data), void *data);
+void cpu_single_step(CPUState *cpu, int enabled);
 
 /* IO ports API */
 #include "exec/ioport.h"
@@ -467,7 +447,7 @@ void run_on_cpu(CPUOldState *env, void (*func)(void *data), void *data);
 /* Return the physical page corresponding to a virtual one. Use it
    only for debugging because no protection checks are done. Return -1
    if no page found. */
-hwaddr cpu_get_phys_page_debug(CPUOldState *env, target_ulong addr);
+hwaddr cpu_get_phys_page_debug(CPUArchState *env, target_ulong addr);
 
 /* memory API */
 
@@ -563,7 +543,7 @@ static inline void cpu_physical_memory_mask_dirty_range(ram_addr_t start,
 
 void cpu_physical_memory_reset_dirty(ram_addr_t start, ram_addr_t end,
                                      int dirty_flags);
-void cpu_tlb_update_dirty(CPUOldState *env);
+void cpu_tlb_update_dirty(CPUArchState *env);
 
 int cpu_physical_memory_set_dirty_tracking(int enable);
 
@@ -599,10 +579,10 @@ extern int64_t tlb_flush_time;
 extern int64_t dev_time;
 #endif
 
-int cpu_memory_rw_debug(CPUOldState *env, target_ulong addr,
+int cpu_memory_rw_debug(CPUState *cpu, target_ulong addr,
                         void *buf, int len, int is_write);
 
-void cpu_inject_x86_mce(CPUOldState *cenv, int bank, uint64_t status,
+void cpu_inject_x86_mce(CPUArchState *cenv, int bank, uint64_t status,
                         uint64_t mcg_status, uint64_t addr, uint64_t misc);
 
 #endif /* CPU_ALL_H */
