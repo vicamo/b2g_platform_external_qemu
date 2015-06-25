@@ -1339,7 +1339,7 @@ gsm_check_number( char*  args )
 }
 
 static int
-do_send_stkCmd( ControlClient  client, char*  args  )
+do_stk_pdu( ControlClient  client, char*  args  )
 {
     if (!args) {
         control_write( client, "KO: missing argument, try 'stk pdu <hexstring>'\r\n" );
@@ -1352,6 +1352,24 @@ do_send_stkCmd( ControlClient  client, char*  args  )
     }
 
     amodem_send_stk_unsol_proactive_command( client->modem, args );
+    return 0;
+}
+
+static int
+do_stk_setupcall( ControlClient  client, char*  args )
+{
+    if (!args) {
+        control_write( client, "KO: missing argument, try 'stk setupcall <phonenumber>'\r\n" );
+        return -1;
+    }
+    if (!client->modem) {
+        control_write( client, "KO: modem emulation not running\r\n" );
+        return -1;
+    }
+    if ( amodem_add_outbound_call( client->modem, args ) < 0 ) {
+        control_write( client, "KO: there are too many calls\r\n" );
+        return -1;
+    }
     return 0;
 }
 
@@ -1761,6 +1779,38 @@ do_gsm_report( ControlClient  client, char*  args )
     return 0;
 }
 
+static int
+do_gsm_enable_disable( ControlClient  client, char  *args, bool enable )
+{
+    if (strcmp( args, "hold" ) == 0)
+        return amodem_set_feature(client->modem, A_MODEM_FEATURE_HOLD, enable);
+
+    control_write( client, "KO: '%s' cannot be enabled or disabled.\r\n", args );
+    return -1;
+}
+
+static int
+do_gsm_enable( ControlClient  client, char  *args )
+{
+    if (!args) {
+        control_write( client, "KO: missing argument, try 'gsm enable <feature>'\r\n" );
+        return -1;
+    }
+
+    return do_gsm_enable_disable(client, args, true);
+}
+
+static int
+do_gsm_disable( ControlClient  client, char  *args )
+{
+    if (!args) {
+        control_write( client, "KO: missing argument, try 'gsm disable <feature>'\r\n" );
+        return -1;
+    }
+
+    return do_gsm_enable_disable(client, args, false);
+}
+
 #if 0
 static const CommandDefRec  gsm_in_commands[] =
 {
@@ -1865,6 +1915,14 @@ static const CommandDefRec  gsm_commands[] =
     "'gsm report'      report all known fields\r\n"
     "'gsm report creg' report CREG field\r\n",
     NULL, do_gsm_report, NULL},
+
+    { "enable", "enable selected modem feature",
+    "'gsm enable hold' enable the hold feature\r\n",
+    NULL, do_gsm_enable, NULL},
+
+    { "disable", "disable selected modem feature",
+    "'gsm disable hold' disable the hold feature\r\n",
+    NULL, do_gsm_disable, NULL},
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
@@ -2023,7 +2081,12 @@ static const CommandDefRec stk_commands[] =
 {
     { "pdu", "issue stk proactive command",
     "'stk pdu <hexstring>' allows you to issue stk PDU to simulate an unsolicted proactive command \r\n", NULL,
-    do_send_stkCmd, NULL },
+    do_stk_pdu, NULL },
+
+    { "setupcall", "create an outbound phone call from stk directly",
+    "'stk setupcall <phonenumber>' allows you to simulate a new outbound call dialed out from stk directly\r\n"
+    "phonenumber is the outbound call number\r\n",
+    NULL, do_stk_setupcall, NULL },
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
@@ -4421,11 +4484,72 @@ do_modem_tech( ControlClient client, char* args )
     return 0;
 }
 
+static int
+do_modem_radio( ControlClient client, char *args )
+{
+    if (!client->modem) {
+        control_write(client, "KO: modem emulation not running\r\n");
+        return -1;
+    }
+
+    if (!args) {
+        ARadioState state = amodem_get_radio_state(client->modem);
+        control_write(client, "%s\r\n",
+                      state == A_RADIO_STATE_OFF ? "disabled" : "enabled");
+        return 0;
+    }
+
+    if (!strcmp(args, "enable")) {
+        amodem_set_radio_state(client->modem, A_RADIO_STATE_ON);
+        return 0;
+    }
+
+    if (!strcmp(args, "disable")) {
+        amodem_set_radio_state(client->modem, A_RADIO_STATE_OFF);
+        return 0;
+    }
+
+    control_write(client, "KO: invalid argument, try 'modem radio [enable|disable]'\r\n");
+    return -1;
+}
+
+static int do_modem_dtmf( ControlClient client, char* args )
+{
+    if (!client->modem) {
+        control_write(client, "KO: modem emulation not running\r\n");
+        return -1;
+    }
+
+    if (!args) {
+      char tone = amodem_get_last_dialed_tone(client->modem);
+      control_write(client, "%c\r\n", tone);
+      return 0;
+    }
+
+    if (!strcmp(args, "reset")) {
+      amodem_reset_last_dialed_tone(client->modem);
+      return 0;
+    }
+
+    control_write(client,
+                  "KO: invalid argument, try 'modem dtmf [reset]'\r\n");
+    return -1;
+}
+
 static const CommandDefRec  modem_commands[] =
 {
     { "tech", "query/switch modem technology",
       NULL, help_modem_tech,
       do_modem_tech, NULL },
+
+    { "radio", "query/switch radio state",
+      "'modem radio': allows you to display the current radio state of emulator modem.\r\n"
+      "'modem radio enable': allows you to enable the radio of emulator modem.\r\n"
+      "'modem radio disable': allows you to disable the radio of emulator modem.\r\n",
+      NULL, do_modem_radio, NULL },
+
+    { "dtmf", "get or reset the last dialed tone",
+      NULL, NULL, do_modem_dtmf, NULL},
 
     { NULL, NULL, NULL, NULL, NULL, NULL }
 };
