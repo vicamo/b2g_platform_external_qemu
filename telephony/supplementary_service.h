@@ -12,17 +12,17 @@
 #ifndef _android_supplementary_service_h
 #define _android_supplementary_service_h
 
-/* call forwarding service classx, see +CCFC commands */
+/* Supplementary service classx, see +CCFC commands */
 typedef enum {
-    A_CALL_FORWARDING_CLASSX_OFFSET_VOICE = 0,
-    A_CALL_FORWARDING_CLASSX_OFFSET_DATA,
-    A_CALL_FORWARDING_CLASSX_OFFSET_FAX,
-    A_CALL_FORWARDING_CLASSX_OFFSET_SMS,
-    A_CALL_FORWARDING_CLASSX_OFFSET_DATA_SYNC,
-    A_CALL_FORWARDING_CLASSX_OFFSET_DATA_ASYNC,
-    A_CALL_FORWARDING_CLASSX_OFFSET_PACKET,
-    A_CALL_FORWARDING_CLASSX_OFFSET_PAD
-} ACallForwardingClassxOffset;
+    A_SERVICE_CLASSX_OFFSET_VOICE = 0,
+    A_SERVICE_CLASSX_OFFSET_DATA,
+    A_SERVICE_CLASSX_OFFSET_FAX,
+    A_SERVICE_CLASSX_OFFSET_SMS,
+    A_SERVICE_CLASSX_OFFSET_DATA_SYNC,
+    A_SERVICE_CLASSX_OFFSET_DATA_ASYNC,
+    A_SERVICE_CLASSX_OFFSET_PACKET,
+    A_SERVICE_CLASSX_OFFSET_PAD
+} AServiceClassxOffset;
 
 /* call forwarding condition reason, see +CCFC commands */
 typedef enum {
@@ -45,9 +45,24 @@ typedef enum {
 
 #define CALL_FORWARDING_MAX_NUMBERS       32
 #define CALL_FORWARDING_MAX_REASON        A_CALL_FORWARDING_REASON_NOT_REACHABLE
-#define CALL_FORWARDING_MAX_CLASSX_OFFSET A_CALL_FORWARDING_CLASSX_OFFSET_PAD
+#define CALL_FORWARDING_MAX_CLASSX_OFFSET A_SERVICE_CLASSX_OFFSET_PAD
 
 typedef struct ASupplementaryServiceRec_*    ASupplementaryService;
+
+/* Supplementary service types */
+typedef enum {
+    A_SERVICE_TYPE_CALL_BARRING = 0
+} AServiceType;
+
+/* Passwords for supplementary services */
+#define SERVICE_PASSWD_DEFAULT_PASSWD       "0000"
+#define SERVICE_PASSWD_MAX_PASSWD_LENGTH    32
+#define SERVICE_PASSWD_MAX_TYPE             A_SERVICE_TYPE_CALL_BARRING
+
+extern bool  asupplementary_check_passwd( ASupplementaryService supplementary,
+                                          AServiceType type, char *passwd);
+extern bool  asupplementary_set_passwd( ASupplementaryService supplementary,
+                                        AServiceType type, char *passwd);
 
 typedef struct ACallForwardRec_ {
     bool  enabled;
@@ -68,4 +83,22 @@ extern int  asupplementary_remove_call_forward( ASupplementaryService supplement
 extern ACallForward  asupplementary_get_call_foward( ASupplementaryService supplementary,
                                                      int reason, int classx_offset );
 
+/* call barring group, see TS 22.088 */
+typedef enum {
+    A_CALL_BARRING_PROGRAM_AO = 0,
+    A_CALL_BARRING_PROGRAM_OI,
+    A_CALL_BARRING_PROGRAM_OX,
+    A_CALL_BARRING_PROGRAM_AI,
+    A_CALL_BARRING_PROGRAM_IR
+} ACallBarringProgram;
+
+#define CALL_BARRING_MAX_PROGRAM        A_CALL_BARRING_PROGRAM_IR
+#define CALL_BARRING_MAX_CLASSX_OFFSET  A_SERVICE_CLASSX_OFFSET_PAD
+
+extern bool  asupplementary_set_call_barring( ASupplementaryService supplementary,
+                                              ACallBarringProgram program,
+                                              AServiceClassxOffset classx_offset, int enable);
+extern bool  asupplementary_is_call_barring_enabled(ASupplementaryService supplementary,
+                                                    ACallBarringProgram program,
+                                                    AServiceClassxOffset classx_offset);
 #endif /* _android_supplementary_service_h */
