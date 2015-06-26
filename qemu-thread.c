@@ -69,6 +69,7 @@ static void timespec_add_ms(struct timespec *ts, uint64_t msecs)
 
 int qemu_mutex_timedlock(QemuMutex *mutex, uint64_t msecs)
 {
+#ifdef __LINUX__
     int err;
     struct timespec ts;
 
@@ -79,6 +80,9 @@ int qemu_mutex_timedlock(QemuMutex *mutex, uint64_t msecs)
     if (err && err != ETIMEDOUT)
         error_exit(err, __func__);
     return err;
+#else
+    return ENOSYS;
+#endif
 }
 
 void qemu_mutex_unlock(QemuMutex *mutex)
@@ -137,6 +141,7 @@ void qemu_cond_wait(QemuCond *cond, QemuMutex *mutex)
 
 int qemu_cond_timedwait(QemuCond *cond, QemuMutex *mutex, uint64_t msecs)
 {
+#ifdef __LINUX__
     struct timespec ts;
     int err;
 
@@ -147,6 +152,9 @@ int qemu_cond_timedwait(QemuCond *cond, QemuMutex *mutex, uint64_t msecs)
     if (err && err != ETIMEDOUT)
         error_exit(err, __func__);
     return err;
+#else
+    return ENOSYS;
+#endif
 }
 
 void qemu_thread_create(QemuThread *thread,
