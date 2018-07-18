@@ -96,6 +96,9 @@ enum {
 struct goldfish_fb_state {
     SysBusDevice parent;
 
+    QSLIST_ENTRY(goldfish_fb_state) slist;
+    uint32_t index;
+
     QemuConsole *con;
     MemoryRegion iomem;
     qemu_irq irq;
@@ -114,21 +117,31 @@ struct goldfish_fb_state {
     MemoryRegionSection fbsection;
 };
 
-#define  GOLDFISH_FB_SAVE_VERSION  3
+static QSLIST_HEAD(, goldfish_fb_state) s_states = QSLIST_HEAD_INITIALIZER(head);
+static uint32_t s_instances = 0;
+
+#define  GOLDFISH_FB_SAVE_VERSION  4
 
 /* Console hooks */
-void goldfish_fb_set_rotation(int rotation)
+static int goldfish_fb_set_dev_rotation(DeviceState *dev, void *opaque)
 {
-    DeviceState *dev = qdev_find_recursive(sysbus_get_default(), TYPE_GOLDFISH_FB);
-    if (dev) {
+    if (dev->id && (strstr(dev->id, TYPE_GOLDFISH_FB) == dev->id)) {
         struct goldfish_fb_state *s = GOLDFISH_FB(dev);
         DisplaySurface *ds = qemu_console_surface(s->con);
-        s->rotation = rotation;
+        s->rotation = *(int*)opaque;
         s->need_update = 1;
         qemu_console_resize(s->con, surface_height(ds), surface_width(ds));
-    } else {
-        fprintf(stderr,"%s: unable to find FB dev\n", __func__);
     }
+
+    return 0;
+}
+
+void goldfish_fb_set_rotation(int rotation)
+{
+    qbus_walk_children(sysbus_get_default(),
+                       goldfish_fb_set_dev_rotation, NULL,
+                       NULL, NULL,
+                       &rotation);
 }
 
 static void goldfish_fb_save(QEMUFile*  f, void*  opaque)
@@ -142,6 +155,7 @@ static void goldfish_fb_save(QEMUFile*  f, void*  opaque)
     qemu_put_be32(f, surface_stride(ds));
     qemu_put_byte(f, 0);
 
+    qemu_put_be32(f, s->index);
     qemu_put_be32(f, s->fb_base);
     qemu_put_byte(f, s->base_valid);
     qemu_put_byte(f, s->need_update);
@@ -180,6 +194,7 @@ static int  goldfish_fb_load(QEMUFile*  f, void*  opaque, int  version_id)
         goto Exit;
     }
 
+    s->index        = qemu_get_be32(f);
     s->fb_base      = qemu_get_be32(f);
     s->base_valid   = qemu_get_byte(f);
     s->need_update  = qemu_get_byte(f);
@@ -512,7 +527,10 @@ static int goldfish_fb_init(SysBusDevice *sbdev)
     DeviceState *dev = DEVICE(sbdev);
     struct goldfish_fb_state *s = GOLDFISH_FB(dev);
 
-    dev->id = g_strdup(TYPE_GOLDFISH_FB);
+    QSLIST_INSERT_HEAD(&s_states, s, slist);
+    s->index = s_instances++;
+
+    dev->id = g_strdup_printf("%s.%u", TYPE_GOLDFISH_FB, s->index);
 
     sysbus_init_irq(sbdev, &s->irq);
 
