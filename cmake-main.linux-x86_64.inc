@@ -95,7 +95,6 @@ set(qemu2-shared_sources ""
    hw/usb/dev-mtp.c
    net/can/can_socketcan.c
    block/sheepdog.c
-   hw/display/goldfish_fb.c
    crypto/random-platform.c
    hw/pci-host/pam.c
    hw/bt/l2cap.c
@@ -1093,6 +1092,7 @@ set(qemu-system-aarch64_sources ""
    hw/cpu/realview_mpcore.c
    hw/cpu/a9mpcore.c
    hw/cpu/a15mpcore.c
+   hw/display/goldfish_fb.c
    hw/display/omap_dss.c
    hw/display/omap_lcdc.c
    hw/display/pxa2xx_lcd.c
@@ -1458,6 +1458,7 @@ set(qemu-system-arm_sources ""
    hw/cpu/realview_mpcore.c
    hw/cpu/a9mpcore.c
    hw/cpu/a15mpcore.c
+   hw/display/goldfish_fb.c
    hw/display/omap_dss.c
    hw/display/omap_lcdc.c
    hw/display/pxa2xx_lcd.c
@@ -1800,6 +1801,7 @@ set(qemu-system-i386_sources ""
    hw/char/virtio-serial-bus.c
    hw/core/generic-loader.c
    hw/core/null-machine.c
+   hw/display/goldfish_fb.c
    hw/display/vga.c
    hw/display/virtio-gpu.c
    hw/display/virtio-gpu-3d.c
@@ -1998,6 +2000,7 @@ set(qemu-system-mips64el_sources ""
    hw/char/virtio-serial-bus.c
    hw/core/generic-loader.c
    hw/core/null-machine.c
+   hw/display/goldfish_fb.c
    hw/display/vga.c
    hw/display/virtio-gpu.c
    hw/display/virtio-gpu-3d.c
@@ -2161,6 +2164,7 @@ set(qemu-system-mipsel_sources ""
    hw/char/virtio-serial-bus.c
    hw/core/generic-loader.c
    hw/core/null-machine.c
+   hw/display/goldfish_fb.c
    hw/display/vga.c
    hw/display/virtio-gpu.c
    hw/display/virtio-gpu-3d.c
@@ -2311,6 +2315,7 @@ set(qemu-system-x86_64_sources ""
    hw/char/virtio-serial-bus.c
    hw/core/generic-loader.c
    hw/core/null-machine.c
+   hw/display/goldfish_fb.c
    hw/display/vga.c
    hw/display/virtio-gpu.c
    hw/display/virtio-gpu-3d.c

@@ -22,6 +22,10 @@
 
 #include <inttypes.h>
 
+#if defined(TARGET_I386) || defined(TARGET_X86_64)
+#define GOLDFISH_FB_SHARE_IRQ 1
+#endif
+
 static int s_use_host_gpu = 0;
 static int s_display_bpp = 32;
 
@@ -400,6 +404,21 @@ static void goldfish_fb_invalidate_display(void * opaque)
     s->need_update = 1;
 }
 
+static int goldfish_fb_calculate_irq_level(struct goldfish_fb_state *s)
+{
+#ifdef GOLDFISH_FB_SHARE_IRQ
+    uint32_t status = 0;
+
+    QSLIST_FOREACH(s, &s_states, slist) {
+        status |= (s->int_status & s->int_enable);
+    }
+
+    return status ? 1 : 0;
+#else
+    return (s->int_status & s->int_enable) ? 1 : 0;
+#endif
+}
+
 static uint64_t goldfish_fb_read(void *opaque, hwaddr offset, unsigned size)
 {
     uint64_t ret = 0;
@@ -423,7 +442,7 @@ static uint64_t goldfish_fb_read(void *opaque, hwaddr offset, unsigned size)
             ret = s->int_status & s->int_enable;
             if(ret) {
                 s->int_status &= ~ret;
-                qemu_irq_lower(s->irq);
+                qemu_set_irq(s->irq, goldfish_fb_calculate_irq_level(s));
             }
             break;
 
@@ -473,7 +492,7 @@ static void goldfish_fb_write(void *opaque, hwaddr offset, uint64_t val,
     switch(offset) {
         case FB_INT_ENABLE:
             s->int_enable = val;
-            qemu_set_irq(s->irq, s->int_status & s->int_enable);
+            qemu_set_irq(s->irq, goldfish_fb_calculate_irq_level(s));
             break;
         case FB_SET_BASE:
             s->fb_base = val;
@@ -487,7 +506,7 @@ static void goldfish_fb_write(void *opaque, hwaddr offset, uint64_t val,
             if (s_use_host_gpu) return;
 
             graphic_hw_update(s->con);
-            qemu_set_irq(s->irq, s->int_status & s->int_enable);
+            qemu_set_irq(s->irq, goldfish_fb_calculate_irq_level(s));
             break;
         case FB_SET_ROTATION:
             error_report("%s: use of deprecated FB_SET_ROTATION %" PRIu64,
