@@ -38,8 +38,8 @@
 #define GOLDFISH_PIPE_IRQ             18
 
 /* goldfish framebuffer */
-#define GOLDFISH_FB_IOMEM_BASE        0xff012000
-#define GOLDFISH_FB_IOMEM_SIZE        0x00000100
+#define GOLDFISH_FB_IOMEM_BASE        0xff030000
+#define GOLDFISH_FB_IOMEM_SIZE        0x00001000
 #define GOLDFISH_FB_IRQ               19
 
 /* goldfish audio */

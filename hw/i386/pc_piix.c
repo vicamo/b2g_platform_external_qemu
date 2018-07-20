@@ -59,6 +59,7 @@
 #include "sysemu/numa.h"
 
 #ifdef CONFIG_ANDROID
+#include "android/globals.h"  /* for android_hw */
 #include "hw/acpi/goldfish_defs.h"
 #endif
 
@@ -255,8 +256,11 @@ static void pc_init1(MachineState *machine,
                          pcms->gsi[GOLDFISH_EVENTS_IRQ]);
     sysbus_create_simple("goldfish_pipe", GOLDFISH_PIPE_IOMEM_BASE,
                          pcms->gsi[GOLDFISH_PIPE_IRQ]);
-    sysbus_create_simple("goldfish_fb", GOLDFISH_FB_IOMEM_BASE,
-                         pcms->gsi[GOLDFISH_FB_IRQ]);
+    for (i = 0; i < android_hw->hw_lcd_num; i++) {
+        sysbus_create_simple("goldfish_fb",
+                             GOLDFISH_FB_IOMEM_BASE + GOLDFISH_FB_IOMEM_SIZE * i,
+                             pcms->gsi[GOLDFISH_FB_IRQ]);
+    }
     sysbus_create_simple("goldfish_audio", GOLDFISH_AUDIO_IOMEM_BASE,
                          pcms->gsi[GOLDFISH_AUDIO_IRQ]);
     sysbus_create_simple("goldfish_rtc", GOLDFISH_RTC_IOMEM_BASE,

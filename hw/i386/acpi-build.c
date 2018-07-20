@@ -26,6 +26,7 @@
 #include "acpi-build.h"
 #include "qemu-common.h"
 #include "qemu/bitmap.h"
+#include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "hw/pci/pci.h"
 #include "qom/cpu.h"
@@ -1034,6 +1035,7 @@ static void build_hpet_aml(Aml *table)
 static void build_goldfish_device_aml(Aml *scope,
                                       const char *dev_name,
                                       const char *hid_name,
+                                      uint64_t    uid,
                                       const char *str_name,
                                       uint32_t iomem_base,
                                       uint32_t iomem_size,
@@ -1043,6 +1045,7 @@ static void build_goldfish_device_aml(Aml *scope,
     Aml *crs;
 
     aml_append(dev, aml_name_decl("_HID", aml_string(hid_name)));
+    aml_append(dev, aml_name_decl("_UID", aml_int(uid)));
     aml_append(dev, aml_name_decl("_STR", aml_unicode(str_name)));
 
     crs = aml_resource_template();
@@ -1153,43 +1156,52 @@ static void build_android_dt_aml(Aml *scope,
 static void build_goldfish_aml(Aml *table)
 {
     Aml *scope = aml_scope("_SB");
+    char dev_name[16];
+    int n;
 
-    build_goldfish_device_aml(scope, "GFBY", "GFSH0001", "goldfish battery",
+    build_goldfish_device_aml(scope, "GFBY", "GFSH0001", 0, "goldfish battery",
                               GOLDFISH_BATTERY_IOMEM_BASE,
                               GOLDFISH_BATTERY_IOMEM_SIZE,
                               GOLDFISH_BATTERY_IRQ);
 
-    build_goldfish_device_aml(scope, "GFEV", "GFSH0002", "goldfish events",
+    build_goldfish_device_aml(scope, "GFEV", "GFSH0002", 0, "goldfish events",
                               GOLDFISH_EVENTS_IOMEM_BASE,
                               GOLDFISH_EVENTS_IOMEM_SIZE,
                               GOLDFISH_EVENTS_IRQ);
 
-    build_goldfish_device_aml(scope, "GFPP", "GFSH0003", "goldfish pipe",
+    build_goldfish_device_aml(scope, "GFPP", "GFSH0003", 0, "goldfish pipe",
                               GOLDFISH_PIPE_IOMEM_BASE,
                               GOLDFISH_PIPE_IOMEM_SIZE,
                               GOLDFISH_PIPE_IRQ);
 
-    build_goldfish_device_aml(scope, "GFFB", "GFSH0004", "goldfish framebuffer",
-                              GOLDFISH_FB_IOMEM_BASE,
-                              GOLDFISH_FB_IOMEM_SIZE,
-                              GOLDFISH_FB_IRQ);
+    for (n = 0; n < android_hw->hw_lcd_num; n++) {
+        if (n)
+            snprintf(dev_name, sizeof(dev_name), "GFB%d", n);
+        else
+            pstrcpy(dev_name, sizeof(dev_name), "GFFB");
 
-    build_goldfish_device_aml(scope, "GFAU", "GFSH0005", "goldfish audio",
+        build_goldfish_device_aml(scope, dev_name, "GFSH0004", n, "goldfish framebuffer",
+                                  GOLDFISH_FB_IOMEM_BASE + GOLDFISH_FB_IOMEM_SIZE * n,
+                                  GOLDFISH_FB_IOMEM_SIZE,
+                                  GOLDFISH_FB_IRQ);
+    }
+
+    build_goldfish_device_aml(scope, "GFAU", "GFSH0005", 0, "goldfish audio",
                               GOLDFISH_AUDIO_IOMEM_BASE,
                               GOLDFISH_AUDIO_IOMEM_SIZE,
                               GOLDFISH_AUDIO_IRQ);
 
-    build_goldfish_device_aml(scope, "GFSK", "GFSH0006", "goldfish sync",
+    build_goldfish_device_aml(scope, "GFSK", "GFSH0006", 0, "goldfish sync",
                               GOLDFISH_SYNC_IOMEM_BASE,
                               GOLDFISH_SYNC_IOMEM_SIZE,
                               GOLDFISH_SYNC_IRQ);
 
-    build_goldfish_device_aml(scope, "GFRT", "GFSH0007", "goldfish rtc",
+    build_goldfish_device_aml(scope, "GFRT", "GFSH0007", 0, "goldfish rtc",
                               GOLDFISH_RTC_IOMEM_BASE,
                               GOLDFISH_RTC_IOMEM_SIZE,
                               GOLDFISH_RTC_IRQ);
 
-    build_goldfish_device_aml(scope, "GFRO", "GFSH0008", "goldfish rotary",
+    build_goldfish_device_aml(scope, "GFRO", "GFSH0008", 0, "goldfish rotary",
                               GOLDFISH_ROTARY_IOMEM_BASE,
                               GOLDFISH_ROTARY_IOMEM_SIZE,
                               GOLDFISH_ROTARY_IRQ);
