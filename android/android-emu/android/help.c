@@ -1453,6 +1453,17 @@ help_virtualscene_poster(stralloc_t* out)
 }
 
 static void
+help_screens(stralloc_t* out)
+{
+    PRINTF(
+    "  Use -screens <num> to set the number of emulated screens.\n"
+    "  Valid range is 1 to 8.\n\n"
+
+    "  Default number of emulated screens is 1.\n\n"
+    );
+}
+
+static void
 help_screen(stralloc_t* out)
 {
     PRINTF(

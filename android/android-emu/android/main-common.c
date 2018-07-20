@@ -1803,6 +1803,20 @@ bool emulator_parseCommonCommandLineOptions(int* p_argc,
     str_reset(&hw->avd_name, avdInfo_getName(avd));
 
     /* Setup screen emulation */
+    if (opts->screens) {
+        long int num;
+
+        num = strtol(opts->screens, NULL, 10);
+        if (num < 1 || num > 8) {
+            derror("Invalid value for -screens <num> parameter: %s\n"
+                   "Valid range is 1 to 8\n",
+                   opts->screens);
+            return false;
+        }
+
+        hw->hw_lcd_num = num;
+    }
+
     if (opts->screen) {
         if (strcmp(opts->screen, "touch") &&
             strcmp(opts->screen, "multi-touch") &&
