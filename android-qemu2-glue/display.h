@@ -23,6 +23,6 @@ ANDROID_BEGIN_HEADER
 #include "android/framebuffer.h"
 
 void android_display_init_no_window(QFrameBuffer* qfbuff);
-bool android_display_init(DisplayState* ds, QFrameBuffer* qfbuff);
+bool android_display_init_one(DisplayState* ds, QemuConsole* con, bool is_last);
 
 ANDROID_END_HEADER

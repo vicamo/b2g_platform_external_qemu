@@ -54,16 +54,13 @@ DisplayState <--> QFrameBuffer <--> QEmulator/SDL
  * and poll user events. Use vga_hw_update().
  */
 static void android_display_producer_check(void* opaque) {
-    /* core: call vga_hw_update(). this will eventually
-     * lead to calls to android_display_update()
-     */
-    (void)opaque;
-    graphic_hw_update(NULL);
+    DisplayChangeListener *dcl = static_cast<DisplayChangeListener*>(opaque);
+    graphic_hw_update(dcl ? dcl->con : NULL);
 }
 
 static void android_display_producer_invalidate(void* opaque) {
-    (void)opaque;
-    graphic_hw_invalidate(NULL);
+    DisplayChangeListener *dcl = static_cast<DisplayChangeListener*>(opaque);
+    graphic_hw_invalidate(dcl ? dcl->con : NULL);
 }
 
 static void android_display_producer_detach(void* opaque) {
@@ -130,21 +127,6 @@ static void android_gl_scanout_disable(DisplayChangeListener *dcl) {
     fprintf(stderr, "stub %s\n", __func__);
 }
 
-static QemuConsole* find_graphic_console() {
-    // find the first graphic console (Android emulator has only one usually)
-    for (int i = 0;; i++) {
-        QemuConsole* const c = qemu_console_lookup_by_index(i);
-        if (!c) {
-            break;
-        }
-        if (qemu_console_is_graphic(c)) {
-            return c;
-        }
-    }
-
-    return NULL;
-}
-
 static int last_graphic_console_index() {
     int last = -1;
     for (int i = 0;; i++) {
@@ -168,26 +150,10 @@ void android_display_init_no_window(QFrameBuffer* qf) {
                               android_display_producer_invalidate, nullptr);
 }
 
-bool android_display_init(DisplayState* ds, QFrameBuffer* qf) {
-    QemuConsole* con = find_graphic_console();
-    if (!con) {
+bool android_display_init_one(DisplayState* ds, QemuConsole* con, bool is_last) {
+    QFrameBuffer* qf = qframebuffer_fifo_get();
+    if (!qf) {
         return false;
-    }
-    if (android_hw->hw_arc) {
-        /* We don't use goldfish_fb in cros now. so
-         * just pick up last graphic console */
-        int index = last_graphic_console_index();
-        if (index < 0) {
-            return false;
-        }
-        console_select(index);
-        con = qemu_console_lookup_by_index(index);
-        QemuUIInfo info = {
-            0, 0,
-            (uint32_t)qf->width,
-            (uint32_t)qf->height,
-        };
-        dpy_set_ui_info(con, &info);
     }
     const auto dcl = new DCLExtra();
 
@@ -207,21 +173,20 @@ bool android_display_init(DisplayState* ds, QFrameBuffer* qf) {
 
     /* Register a change listener for it */
     dcl->fb = qf;
+    dcl->con = con;
 
     dclOps.dpy_name = "qemu2-glue";
     dclOps.dpy_refresh = &android_display_refresh;
     dclOps.dpy_gfx_update = &android_display_update;
     dclOps.dpy_gfx_switch = &android_display_switch;
 
-    if (android_hw->hw_arc) {
+    if (is_last && android_hw->hw_arc) {
         dclOps.dpy_gl_ctx_create       = &android_gl_create_context;
         dclOps.dpy_gl_ctx_destroy      = &android_gl_destroy_context;
         dclOps.dpy_gl_ctx_make_current = &android_gl_make_context_current;
         dclOps.dpy_gl_scanout_disable  = &android_gl_scanout_disable;
         dclOps.dpy_gl_scanout_texture  = &android_gl_scanout_texture;
         dclOps.dpy_gl_update           = &android_gl_scanout_flush;
-
-        dcl->con = con;
     }
 
     dcl->ops = &dclOps;
@@ -244,7 +209,18 @@ extern "C" int sdl_display_init(DisplayState* ds, DisplayOptions* opts) {
         return true;
     }
 
-    return android_display_init(ds, qframebuffer_fifo_get());
+    int last = last_graphic_console_index();
+    for (int i = 0;; i++) {
+        QemuConsole* c = qemu_console_lookup_by_index(i);
+        if (!c) {
+            break;
+        }
+        if (qemu_console_is_graphic(c)) {
+            android_display_init_one(ds, c, i == last);
+        }
+    }
+
+    return true;
 }
 
 static QemuDisplay qemu_display_android = {
