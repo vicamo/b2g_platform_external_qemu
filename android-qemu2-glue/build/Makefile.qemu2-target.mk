@@ -98,6 +98,9 @@ LOCAL_C_INCLUDES += \
 # TODO: Use the glue code to use the Qt-based UI instead.
 LOCAL_SRC_FILES += \
     android-qemu2-glue/main.cpp \
+    $(call qemu2-if-target,arm arm64, \
+        hw/arm/ranchu.c \
+        ) \
     $(call qemu2-if-target,x86 x86_64, \
         hw/i386/acpi-build.c \
         hw/i386/pc_piix.c \

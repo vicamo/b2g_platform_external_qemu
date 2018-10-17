@@ -43,6 +43,10 @@
 #include "monitor/monitor.h"
 #include "qapi/error.h"
 
+#ifdef CONFIG_ANDROID
+#include "android/globals.h"  /* for android_hw */
+#endif
+
 #define NUM_VIRTIO_TRANSPORTS 32
 
 /* Number of external interrupt lines to configure the GIC with */
@@ -111,7 +115,7 @@ static const MemMapEntry memmap[] = {
     [RANCHU_GIC_DIST] = { 0x8000000, 0x10000 },
     [RANCHU_GIC_CPU] = { 0x8010000, 0x10000 },
     [RANCHU_UART] = { 0x9000000, 0x1000 },
-    [RANCHU_GOLDFISH_FB] = { 0x9010000, 0x100 },
+    [RANCHU_GOLDFISH_FB] = { 0x9010000, 0x1000 },
     [RANCHU_GOLDFISH_BATTERY] = { 0x9020000, 0x1000 },
     [RANCHU_GOLDFISH_AUDIO] = { 0x9030000, 0x100 },
     [RANCHU_GOLDFISH_EVDEV] = { 0x9040000, 0x1000 },
@@ -124,12 +128,12 @@ static const MemMapEntry memmap[] = {
 
 static const int irqmap[] = {
     [RANCHU_UART] = 1,
-    [RANCHU_GOLDFISH_FB] = 2,
     [RANCHU_GOLDFISH_BATTERY] = 3,
     [RANCHU_GOLDFISH_AUDIO] = 4,
     [RANCHU_GOLDFISH_EVDEV] = 5,
     [RANCHU_GOLDFISH_PIPE] = 6,
     [RANCHU_MMIO] = 16, /* ...to 16 + NUM_VIRTIO_TRANSPORTS - 1 */
+    [RANCHU_GOLDFISH_FB] = 16 + NUM_VIRTIO_TRANSPORTS, /* ...to 16 + NUM_VIRTIO_TRANSPORTS + 8 - 1 */
 };
 
 static QemuDeviceTreeSetupFunc device_tree_setup_func;
@@ -430,6 +434,47 @@ static void create_serial_device(int serial_index, const VirtBoardInfo *vbi,
                        num_compat_strings, clocks, num_clocks);
 }
 
+static void create_fb_devices(const VirtBoardInfo *vbi, qemu_irq *pic)
+{
+    const char *sysbus_name = "goldfish_fb";
+    const char *compat = "google,goldfish-fb\0"
+                         "generic,goldfish-fb";
+    const int num_compat_strings = 2;
+
+    int irq = irqmap[RANCHU_GOLDFISH_FB];
+    hwaddr base = memmap[RANCHU_GOLDFISH_FB].base;
+    hwaddr size = memmap[RANCHU_GOLDFISH_FB].size;
+    char *nodename;
+    int i, j;
+    int compat_sz = 0;
+
+    for (i = 0; i < num_compat_strings; i++) {
+        compat_sz += strlen(compat + compat_sz) + 1;
+    }
+
+    for (i = 0; i < android_hw->hw_lcd_num; i++, irq++, base += size) {
+        DeviceState *dev = qdev_create(NULL, sysbus_name);
+        qdev_init_nofail(dev);
+
+        SysBusDevice *s = SYS_BUS_DEVICE(dev);
+        sysbus_mmio_map(s, 0, base);
+        if (pic[irq]) {
+            sysbus_connect_irq(s, 0, pic[irq]);
+        }
+
+        nodename = g_strdup_printf("/%s@%" PRIx64, sysbus_name, base);
+        qemu_fdt_add_subnode(vbi->fdt, nodename);
+        qemu_fdt_setprop(vbi->fdt, nodename, "compatible", compat, compat_sz);
+        qemu_fdt_setprop_sized_cells(vbi->fdt, nodename, "reg", 2, base, 2, size);
+        if (irq) {
+            qemu_fdt_setprop_cells(vbi->fdt, nodename, "interrupts",
+                                   GIC_FDT_IRQ_TYPE_SPI, irq,
+                                   GIC_FDT_IRQ_FLAGS_LEVEL_HI);
+        }
+        g_free(nodename);
+    }
+}
+
 static void create_virtio_devices(const VirtBoardInfo *vbi, qemu_irq *pic)
 {
     int i;
@@ -545,9 +590,6 @@ static void ranchu_init(MachineState *machine)
     create_gic(vbi, pic);
     create_serial_device(0, vbi, pic, RANCHU_UART, "pl011",
                          "arm,pl011\0arm,primecell", 2, "uartclk\0apb_pclk", 2);
-    create_simple_device(vbi, pic, RANCHU_GOLDFISH_FB, "goldfish_fb",
-                         "google,goldfish-fb\0"
-                         "generic,goldfish-fb", 2, 0, 0);
     create_simple_device(vbi, pic, RANCHU_GOLDFISH_BATTERY, "goldfish_battery",
                          "google,goldfish-battery\0"
                          "generic,goldfish-battery", 2, 0, 0);
@@ -563,6 +605,8 @@ static void ranchu_init(MachineState *machine)
     create_simple_device(vbi, pic, RANCHU_GOLDFISH_SYNC, "goldfish_sync",
                          "google,goldfish-sync\0"
                          "generic,goldfish-sync", 2, 0, 0);
+
+    create_fb_devices(vbi, pic);
 
     /* Create mmio transports, so the user can create virtio backends
      * (which will be automatically plugged in to the transports). If
